@@ -503,6 +503,74 @@ def _quote_win(s):
     return '"' + s.replace('"', '\\"') + '"'
 
 
+# ============================================================ identification + remarks
+
+def compute_identification_status(svc_el):
+    """XML <service> 요소를 분석해 식별 상태 4값 중 하나 리턴.
+    확인 / 추측 / tcpwrapped / 미확인"""
+    if svc_el is None:
+        return "미확인"
+    name = (svc_el.get("name") or "").strip()
+    method = (svc_el.get("method") or "").strip()
+    if not name or name == "unknown":
+        return "미확인"
+    if name == "tcpwrapped":
+        return "tcpwrapped"
+    if method == "probed":
+        return "확인"
+    if method == "table":
+        return "추측"
+    return "미확인"
+
+
+# (script_id_substring, label, regex) — NSE 결과에서 한 줄 요약 추출용
+_REMARK_PATTERNS = [
+    ("ssl-cert", "CN", re.compile(r"commonName=([^\n,/]+)")),
+    ("smb-os-discovery", "OS", re.compile(r"OS:\s*([^\n]+)")),
+    ("smb-os-discovery", "host", re.compile(r"Computer name:\s*([^\n]+)")),
+    ("rdp-ntlm-info", "DNS_Computer_Name", re.compile(r"DNS_Computer_Name:\s*([^\n]+)")),
+    ("rdp-ntlm-info", "Target_Name", re.compile(r"Target_Name:\s*([^\n]+)")),
+    ("nbstat", "host", re.compile(r"Computer name:\s*([^\n]+)")),
+    ("http-title", "title", re.compile(r"\A\s*([^\n]+)")),
+]
+
+
+def extract_key_line(script_id, output):
+    """NSE 한 스크립트 출력에서 핵심 한 줄 키-값 추출. 없으면 빈 문자열."""
+    if not output:
+        return ""
+    sid = (script_id or "").lower()
+    for sid_match, label, regex in _REMARK_PATTERNS:
+        if sid_match in sid:
+            m = regex.search(output)
+            if m:
+                val = m.group(1).strip(" \t,")
+                if not val:
+                    continue
+                if "doesn't have a title" in val.lower():
+                    continue
+                # 한 셀에 들어갈 수 있게 너무 길면 자름
+                if len(val) > 80:
+                    val = val[:77] + "..."
+                return f"{label}={val}"
+    return ""
+
+
+def compute_remarks(detail, nse_data):
+    """비고 컬럼 — detail 우선, 그 다음 NSE key-line 1~2개. 멀티라인 절대 X.
+    nse_data = [(script_id, output), ...]"""
+    parts = []
+    if detail:
+        parts.append(detail)
+    for sid, out in (nse_data or []):
+        key = extract_key_line(sid, out)
+        if key and key not in parts:
+            parts.append(key)
+            if len(parts) >= 2:
+                break
+    return ", ".join(parts)
+
+
 @dataclass
 class ValidationIssue:
     code: str
@@ -1749,23 +1817,31 @@ class NmapParserApp:
 
                 category, usage = self._lookup_full(probed_short, guessed)
 
+                # 식별 (4값) — service XML 노드 그대로 분석
+                identification = compute_identification_status(svc_el)
+
+                # 비고 — detail + NSE key-line 1~2개 (멀티라인 X)
                 scripts = port.findall("script")
+                nse_data = [(sc.get("id", "") or "", sc.get("output", "") or "") for sc in scripts]
+                remarks = compute_remarks(detail, nse_data)
+
                 if not scripts:
                     rows.append([addr, portid, state, guessed, probed_short,
-                                 category, usage, detail, "", ""])
+                                 identification, category, usage, detail, remarks, "", ""])
                 else:
-                    for sc in scripts:
-                        sid = sc.get("id", "") or ""
-                        out = (sc.get("output", "") or "").replace("\r", " ").replace("\n", " | ")
+                    for sid, raw_out in nse_data:
+                        out_oneline = raw_out.replace("\r", " ").replace("\n", " | ")
                         rows.append([addr, portid, state, guessed, probed_short,
-                                     category, usage, detail, sid, out])
+                                     identification, category, usage, detail, remarks,
+                                     sid, out_oneline])
 
         csv_path = (self.output_prefix or "") + ".csv"
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
             w.writerow(["IP", "PORT", "포트상태",
-                        "추측서비스", "확인서비스(short)", "분류", "용도",
-                        "상세(제품/버전)", "NSE스크립트명", "스크립트출력"])
+                        "추측서비스", "확인서비스(short)", "식별",
+                        "분류", "용도", "상세(제품/버전)", "비고",
+                        "NSE스크립트명", "스크립트출력"])
             for r in rows:
                 w.writerow(r)
         return csv_path

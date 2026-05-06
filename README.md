@@ -77,19 +77,44 @@ A row whose `옵션` starts with `--script` is automatically placed in the NSE p
 
 ## CSV output
 
-The CSV that comes out of a scan has these 10 columns — **observable facts only, no judgment**:
+The CSV that comes out of a scan has these 12 columns — **observable facts only, no judgment**:
 
-`IP, PORT, 포트상태, 추측서비스, 확인서비스(short), 분류, 용도, 상세(제품/버전), NSE스크립트명, 스크립트출력`
+`IP, PORT, 포트상태, 추측서비스, 확인서비스(short), 식별, 분류, 용도, 상세(제품/버전), 비고, NSE스크립트명, 스크립트출력`
 
 | Column | Source | Meaning |
 |---|---|---|
 | **추측서비스** | `nmap-services` file lookup by port number | Static port→name mapping (e.g. `ssh`, `http`, `microsoft-ds`). Always populated. |
 | **확인서비스(short)** | XML `<service>@name` only | The service name nmap actually identified — `ssh`, `http`, `msrpc`. With `?` suffix when probe failed (`microsoft-ds?`). Empty when nothing detected. |
-| **분류** | `categories.xlsx` lookup | Korean category — `웹` / `원격접속` / `DBMS` / `파일공유` / `메일` / `RPC` / etc. Falls back to lookup by 추측서비스 if probed name isn't in the table; finally `미분류`. |
+| **식별** | XML `<service>@method` analysis | Identification status — 4 values (see below). |
+| **분류** | `categories.xlsx` lookup | Korean category — `웹` / `원격접속` / `DBMS` / `파일공유` / `메일` / `RPC` / etc. |
 | **용도** | `categories.xlsx` lookup | Observational role — `관리` / `사용자` / `시스템` / `모니터링` / `내부통신` / `개발` / `보안` / `인프라`. |
-| **상세(제품/버전)** | XML `<service>` `@product` + `@version` + `@extrainfo` + `@ostype` joined | Verbose detail kept separate from the short name, e.g. `OpenSSH 9.6p1 Ubuntu 3ubuntu13.16 Ubuntu Linux`. |
+| **상세(제품/버전)** | XML `<service>` `@product` + `@version` + `@extrainfo` + `@ostype` joined | Verbose detail kept separate from the short name. |
+| **비고** | auto-generated one-liner | Detail string + 1~2 NSE key lines (CN, OS, hostname, etc.), comma-joined. **Single line only — never multi-line.** |
 | NSE스크립트명 | XML `<script>@id` | Matched NSE script ID. Multiple matches → multiple rows for the same port. |
 | 스크립트출력 | XML `<script>@output` | NSE script raw output (newlines replaced with ` \| `). |
+
+### 식별 column — 4 values
+
+| Value | Meaning |
+|---|---|
+| `확인` | `<service @method="probed">` — nmap probed and got a product/version match |
+| `추측` | `<service @method="table">` — port→name lookup only (probe attempted but failed; usually has `?` in 확인서비스(short)) |
+| `tcpwrapped` | `<service @name="tcpwrapped">` — port responds to handshake but won't engage with probes |
+| `미확인` | no `<service>` element, or `name="unknown"` |
+
+### 비고 column — auto-generated one-liner
+
+Built per port (the same value repeats across NSE multi-rows):
+1. **First**: the `상세(제품/버전)` value (e.g. `Apache httpd 2.4.58`).
+2. **Then**: 1~2 key lines from NSE results, picked by script ID:
+   - `ssl-cert` → `CN=...`
+   - `smb-os-discovery` → `OS=...` or `host=...`
+   - `rdp-ntlm-info` → `DNS_Computer_Name=...` or `Target_Name=...`
+   - `nbstat` → `host=...`
+   - `http-title` → `title=...`
+3. **Empty** if no detail and no NSE match.
+
+The two parts are joined with `, `. Each part trimmed to 80 chars max. **No newlines** — Excel rows stay one line tall.
 
 > **Scope of this tool — observation only.** The CSV records what nmap saw. Judgment calls (priority, exposure assessment, recommended fixes) are intentionally *not* generated here — they belong to the human reviewer or to a downstream tool. `분류` and `용도` are descriptive labels, not risk scores.
 
@@ -114,14 +139,13 @@ The `추측서비스` and `확인서비스(short)` columns preserve the original
 
 ### Real-world example from a localhost scan
 
-| PORT | 추측서비스 | 확인서비스(short) | 분류 | 용도 | 상세(제품/버전) |
+| PORT | 확인서비스(short) | 식별 | 분류 | 용도 | 비고 |
 |---|---|---|---|---|---|
-| 22 | ssh | `ssh` | 원격접속 | 관리 | `OpenSSH 9.6p1 Ubuntu 3ubuntu13.16 Ubuntu Linux` |
-| 135 | msrpc | `msrpc` | RPC | 시스템 | `Microsoft Windows RPC Windows` |
-| 445 | microsoft-ds | `microsoft-ds?` | 파일공유 | 시스템 | (empty — probe failed) |
-| 902 | iss-realsecure | `vmware-auth` | 관리 | 관리 | `VMware Authentication Daemon 1.10 Uses VNC, SOAP` |
-| 3389 | ms-wbt-server | `ms-wbt-server?` | 원격접속 | 관리 | (empty — probe failed) |
-| 5040 | unknown | (empty) | 미분류 | (empty) | (empty) |
+| 22 | `ssh` | 확인 | 원격접속 | 관리 | `OpenSSH 9.6p1 Ubuntu 3ubuntu13.16 Ubuntu Linux` |
+| 135 | `msrpc` | 확인 | RPC | 시스템 | `Microsoft Windows RPC Windows` |
+| 445 | `microsoft-ds?` | 추측 | 파일공유 | 시스템 | (empty) |
+| 3389 | `ms-wbt-server?` | 추측 | 원격접속 | 관리 | `DNS_Computer_Name=yuyu, CN=yuyu` |
+| 5040 | (empty) | 미확인 | 미분류 | (empty) | (empty) |
 
 ### Reference scan command (`phase1`)
 
