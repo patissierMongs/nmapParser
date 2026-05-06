@@ -29,7 +29,7 @@ Most nmap GUIs (Zenmap, etc.) expose the same English flags as the CLI. For some
 | **Targets** | Multi-line text box (free-form IPs, CIDRs, hostnames). `📁 파일에서 불러오기` button reads `.txt` (one target per line) |
 | **Real-time progress** | `--stats-every 1m` is added by default — nmap forces a progress line every minute, so the GUI log never appears stuck even when stdout is buffered |
 | **Log buffer** | The on-screen log keeps the most recent 275 lines (rolling); the **complete** stdout is saved to `<output>/<target>_<timestamp>.log`, openable from the `전체 로그 보기 (.log)` button |
-| **CSV export** | Optional CSV conversion of XML output. Two service columns (see below) |
+| **CSV export** | 9-column CSV: IP / PORT / 포트상태 / 추측서비스 / 확인서비스(short) / **분류** / 상세(제품/버전) / NSE스크립트명 / 스크립트출력. Categories driven by editable `categories.xlsx` (~95 entries) |
 | **Auto nmap detection** | Looks for `C:\Program Files (x86)\Nmap\nmap.exe`, then `C:\Program Files\Nmap\nmap.exe`, then a sibling `nmap.exe`. Manual selection (red button) if not found |
 | **Migration** | Old `options.csv` is auto-migrated to `options.xlsx` on first run; original is kept as `options.csv.bak` |
 | **Excel safety** | All cells use shared-string encoding so values like `-Pn`, `--version-all`, `=SUM(...)`, `+x`, `@y` are never interpreted as formulas (no `#NAME?` errors, no recovery prompt) |
@@ -75,34 +75,49 @@ A row whose `옵션` starts with `--script` is automatically placed in the NSE p
 2. Append a new row, e.g. `["Aggressive scan", "-A", "0", "", "OS detection + version + default NSE + traceroute combo"]`.
 3. Save. Back in the app, click `옵션 다시 불러오기`. The new checkbox appears immediately.
 
-## CSV output — the two service columns
+## CSV output
 
-The CSV that comes out of a scan has these columns:
+The CSV that comes out of a scan has these 9 columns:
 
-`IP, PORT, 포트상태, 추측서비스(table), 확인서비스(probed), NSE스크립트명, 스크립트출력`
-
-The two service columns are the heart of nmapParser:
+`IP, PORT, 포트상태, 추측서비스, 확인서비스(short), 분류, 상세(제품/버전), NSE스크립트명, 스크립트출력`
 
 | Column | Source | Meaning |
 |---|---|---|
-| **추측서비스(table)** | `nmap-services` file lookup, by port number alone | What nmap *guesses* the service is, based on the convention "port 22 = ssh." Always populated. |
-| **확인서비스(probed)** | XML `<service>` element with `method` attribute | What nmap *actually probed*. Three cases: |
-| | `method="probed"` | `name + product + version` (e.g. `ssh OpenSSH 9.6p1 Ubuntu 3ubuntu13.16`) — confirmed |
-| | `method="table"` | `name?` (e.g. `microsoft-ds?`) — probe was attempted but failed; the user sees a `?` and knows the result is unverified |
-| | no `<service>` element | empty — nothing detected |
+| **추측서비스** | `nmap-services` file lookup by port number | Static port→name mapping (e.g. `ssh`, `http`, `microsoft-ds`). Always populated. |
+| **확인서비스(short)** | XML `<service>@name` only | Just the service name nmap actually identified — `ssh`, `http`, `msrpc`. With `?` suffix when probe failed (`microsoft-ds?`). Empty when nothing detected. |
+| **분류** | `categories.xlsx` lookup | Korean category — `웹` / `원격접속` / `DBMS` / `파일공유` / `메일` / `RPC` / etc. Falls back to lookup by 추측서비스 if the probed name isn't in the table; finally `미분류`. |
+| **상세(제품/버전)** | XML `<service>` `@product` + `@version` + `@extrainfo` + `@ostype` joined | Detail row used only when you need to drill in (e.g. `OpenSSH 9.6p1 Ubuntu 3ubuntu13.16 Ubuntu Linux`). |
+| NSE스크립트명 | XML `<script>@id` | Matched NSE script ID. Multiple matches → multiple rows for the same port. |
+| 스크립트출력 | XML `<script>@output` | NSE script raw output (newlines replaced with ` \| `). |
 
-This is the user's core ask: when port `22000` shows `snapenetio` from the table lookup but the actual probe identified it as `ssh OpenSSH ...`, the two columns will diverge dramatically and the user will know not to trust the table guess. When the probe fails (port `445` shows `microsoft-ds?`), the trailing `?` is a visual flag that the result is unverified — the kind of thing that's invisible in a normal nmap output.
+The split between **확인서비스(short)** and **상세(제품/버전)** is the key change: the short column is the Excel filter/sort key, the detail column carries the verbose product/version string. With the **분류** column you can filter the CSV to "웹 only" or "DBMS only" with one click in Excel.
 
-A real-world example from a localhost scan:
+### Why 분류
+Most scans return enough ports that you spend the next minute mentally categorizing — "what's a web server, what's a DB, what's just RPC noise." `categories.xlsx` does that for you:
 
-| PORT | 추측서비스(table) | 확인서비스(probed) |
+| 서비스명 | 분류 | 설명 |
 |---|---|---|
-| 22 | ssh | `ssh OpenSSH 9.6p1 Ubuntu 3ubuntu13.16 Ubuntu Linux; protocol 2.0` |
-| 135 | msrpc | `msrpc Microsoft Windows RPC` |
-| 445 | microsoft-ds | `microsoft-ds?` ← probe failed, guess unverified |
-| 902 | iss-realsecure | `vmware-auth VMware Authentication Daemon 1.10` ← guess was way off |
-| 3389 | ms-wbt-server | `ms-wbt-server?` ← probe failed |
-| 5040 | unknown | (empty) ← no probe response at all |
+| ssh | 원격접속 | SSH 원격 셸/관리 접속 |
+| http | 웹 | HTTP 웹 서버 |
+| mysql | DBMS | MySQL/MariaDB |
+| ldap | 디렉토리 | LDAP 디렉토리 |
+| ... | ... | ... |
+
+About 95 entries auto-shipped. Edit `categories.xlsx` in Excel and click `분류 다시 불러오기` to add your own.
+
+### Two-column "guess vs probe" intent
+The `추측서비스` and `확인서비스(short)` columns together preserve the original intent: when port `22000` shows `snapenetio` (table guess) but `확인서비스(short)` is empty/different, you know the table was wrong. When `확인서비스(short)` ends in `?`, you know nmap probed but couldn't identify — `microsoft-ds?` means "we tried, failed, and the table guess is all you have."
+
+### Real-world example from a localhost scan
+
+| PORT | 추측서비스 | 확인서비스(short) | 분류 | 상세(제품/버전) |
+|---|---|---|---|---|
+| 22 | ssh | `ssh` | 원격접속 | `OpenSSH 9.6p1 Ubuntu 3ubuntu13.16 Ubuntu Linux` |
+| 135 | msrpc | `msrpc` | RPC | `Microsoft Windows RPC Windows` |
+| 445 | microsoft-ds | `microsoft-ds?` | 파일공유 | (empty — probe failed) |
+| 902 | iss-realsecure | `vmware-auth` | 관리 | `VMware Authentication Daemon 1.10 Uses VNC, SOAP` |
+| 3389 | ms-wbt-server | `ms-wbt-server?` | 원격접속 | (empty — probe failed) |
+| 5040 | unknown | (empty) | 미분류 | (empty) |
 
 ## Tech stack
 

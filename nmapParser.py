@@ -44,6 +44,174 @@ import xlsx_io
 
 OPTIONS_XLSX_NAME = "options.xlsx"
 OPTIONS_CSV_NAME = "options.csv"  # 구버전 호환 (자동 마이그레이션 후 .bak 으로 이동)
+CATEGORIES_XLSX_NAME = "categories.xlsx"
+
+
+# ============================================================ categories
+# (서비스명, 분류, 설명) — categories.xlsx 가 없으면 이 셋으로 새로 만들어짐.
+# 확인서비스(short) 또는 추측서비스 의 이름으로 lookup 해서 "분류" 컬럼 결정.
+DEFAULT_CATEGORIES = [
+    # 원격 접속
+    ("ssh", "원격접속", "SSH 원격 셸/관리 접속"),
+    ("telnet", "원격접속", "Telnet 평문 원격"),
+    ("rdp", "원격접속", "Microsoft RDP"),
+    ("ms-wbt-server", "원격접속", "Microsoft RDP"),
+    ("vnc", "원격접속", "VNC 원격 화면"),
+    ("vnc-http", "원격접속", "VNC over HTTP"),
+    ("xrdp", "원격접속", "xrdp (Linux RDP)"),
+    # 웹 / 프록시
+    ("http", "웹", "HTTP 웹 서버"),
+    ("http-alt", "웹", "HTTP 대체 포트"),
+    ("https", "웹", "HTTPS 암호화 웹"),
+    ("https-alt", "웹", "HTTPS 대체 포트"),
+    ("ssl/http", "웹", "HTTPS 암호화 웹"),
+    ("ssl/https", "웹", "HTTPS 암호화 웹"),
+    ("ajp13", "웹", "AJP13 Tomcat 백엔드"),
+    ("http-proxy", "프록시", "HTTP 프록시 (Squid 등)"),
+    ("socks", "프록시", "SOCKS 프록시"),
+    # 인쇄
+    ("ipp", "인쇄", "IPP 인쇄 (HTTP 기반)"),
+    ("printer", "인쇄", "LPD 인쇄"),
+    ("lpd", "인쇄", "LPD 인쇄"),
+    # DBMS
+    ("mysql", "DBMS", "MySQL/MariaDB"),
+    ("mariadb", "DBMS", "MariaDB"),
+    ("postgresql", "DBMS", "PostgreSQL"),
+    ("postgres", "DBMS", "PostgreSQL"),
+    ("mongodb", "DBMS", "MongoDB"),
+    ("mongo", "DBMS", "MongoDB"),
+    ("redis", "DBMS", "Redis 키-값"),
+    ("ms-sql-s", "DBMS", "Microsoft SQL Server"),
+    ("ms-sql-m", "DBMS", "Microsoft SQL Server (monitor)"),
+    ("oracle-tns", "DBMS", "Oracle TNS Listener"),
+    ("elasticsearch", "DBMS", "Elasticsearch 검색엔진"),
+    ("couchdb", "DBMS", "Apache CouchDB"),
+    ("neo4j", "DBMS", "Neo4j 그래프 DB"),
+    ("influxdb", "DBMS", "InfluxDB 시계열"),
+    ("memcache", "DBMS", "Memcached"),
+    ("memcached", "DBMS", "Memcached"),
+    ("cassandra", "DBMS", "Cassandra"),
+    ("hbase", "DBMS", "HBase"),
+    # 메시지큐
+    ("amqp", "메시지큐", "RabbitMQ AMQP"),
+    ("mqtt", "메시지큐", "MQTT"),
+    ("nats", "메시지큐", "NATS"),
+    ("kafka", "메시지큐", "Kafka"),
+    # 메일
+    ("smtp", "메일", "SMTP 송신"),
+    ("submission", "메일", "SMTP submission"),
+    ("smtps", "메일", "SMTPS"),
+    ("pop3", "메일", "POP3"),
+    ("pop3s", "메일", "POP3S"),
+    ("imap", "메일", "IMAP"),
+    ("imaps", "메일", "IMAPS"),
+    # 디렉토리 / 인증
+    ("ldap", "디렉토리", "LDAP 디렉토리"),
+    ("ldaps", "디렉토리", "LDAPS"),
+    ("kerberos-sec", "인증", "Kerberos KDC"),
+    ("kpasswd", "인증", "Kerberos kpasswd"),
+    # DNS
+    ("domain", "DNS", "DNS"),
+    ("dns", "DNS", "DNS"),
+    # 파일 공유 / 전송
+    ("microsoft-ds", "파일공유", "SMB Microsoft 파일공유"),
+    ("netbios-ssn", "파일공유", "NetBIOS Session"),
+    ("netbios-ns", "파일공유", "NetBIOS Name"),
+    ("nbstat", "파일공유", "NetBIOS Status"),
+    ("nfs", "파일공유", "NFS"),
+    ("ftp", "파일전송", "FTP"),
+    ("ftps", "파일전송", "FTPS"),
+    ("tftp", "파일전송", "TFTP"),
+    ("sftp", "파일전송", "SFTP"),
+    # 시간 / 모니터링 / 로그
+    ("ntp", "시간동기", "NTP"),
+    ("snmp", "모니터링", "SNMP"),
+    ("snmptrap", "모니터링", "SNMP Trap"),
+    ("zabbix-agent", "모니터링", "Zabbix Agent"),
+    ("zabbix-trapper", "모니터링", "Zabbix Trapper"),
+    ("prometheus", "모니터링", "Prometheus"),
+    ("grafana", "모니터링", "Grafana"),
+    ("syslog", "로그수집", "Syslog"),
+    ("splunk", "로그분석", "Splunk"),
+    # VPN / VoIP / 미디어
+    ("isakmp", "VPN", "IKE/IPsec"),
+    ("ipsec-nat-t", "VPN", "IPsec NAT-T"),
+    ("openvpn", "VPN", "OpenVPN"),
+    ("sip", "VoIP", "SIP"),
+    ("rtsp", "미디어", "RTSP"),
+    # 네트워크 검색
+    ("ssdp", "네트워크검색", "SSDP UPnP"),
+    ("upnp", "네트워크검색", "UPnP"),
+    ("mdns", "네트워크검색", "Multicast DNS"),
+    # RPC / 관리
+    ("msrpc", "RPC", "Microsoft RPC"),
+    ("rpcbind", "RPC", "ONC RPC portmapper"),
+    ("sunrpc", "RPC", "ONC RPC"),
+    ("nfs-or-iis", "RPC", "Microsoft RPC / NFS"),
+    ("ipmi", "관리", "IPMI BMC 관리"),
+    ("wsdapi", "관리", "WS-Discovery"),
+    ("vmware-auth", "관리", "VMware Authentication Daemon"),
+    # 산업 제어
+    ("modbus", "산업제어", "Modbus"),
+    ("enip", "산업제어", "EtherNet/IP"),
+    ("bacnet", "산업제어", "BACnet"),
+    ("s7", "산업제어", "Siemens S7"),
+    ("opcua", "산업제어", "OPC UA"),
+    # 진단 / 정보
+    ("chargen", "진단", "Character Generator (RFC 864)"),
+    ("echo", "진단", "Echo (RFC 862)"),
+    ("discard", "진단", "Discard (RFC 863)"),
+    ("finger", "정보조회", "Finger"),
+    # 버전관리 / 분산
+    ("git", "버전관리", "Git"),
+    ("svn", "버전관리", "Subversion"),
+    ("zookeeper", "분산조정", "ZooKeeper"),
+    ("etcd", "분산조정", "etcd"),
+    # 컨테이너 / CI
+    ("docker", "컨테이너", "Docker API"),
+    ("kubernetes", "컨테이너", "Kubernetes API"),
+    ("jenkins", "CI/CD", "Jenkins"),
+    ("gitlab", "CI/CD", "GitLab"),
+    # 보안 도구
+    ("nessus", "보안도구", "Nessus"),
+]
+
+
+def write_default_categories_xlsx(path):
+    """categories.xlsx 가 없을 때 기본값으로 새 파일 작성."""
+    rows = [["서비스명", "분류", "설명"]]
+    for name, cat, desc in DEFAULT_CATEGORIES:
+        rows.append([name, cat, desc])
+    xlsx_io.write_xlsx(path, rows, col_widths=[24, 18, 50])
+
+
+def load_categories_xlsx(path):
+    """
+    categories.xlsx 파싱.
+    리턴: ({서비스명_lower: (분류, 설명)}, errors)
+    """
+    catmap = {}
+    errors = []
+    try:
+        all_rows = xlsx_io.read_xlsx(path)
+    except Exception as e:
+        return {}, [f"categories.xlsx 읽기 실패: {e}"]
+    if not all_rows:
+        return {}, ["categories.xlsx 가 비어 있음."]
+    # 헤더 스킵
+    for i, row in enumerate(all_rows[1:], start=2):
+        if not row or all(not (c or "").strip() for c in row):
+            continue
+        if len(row) < 2:
+            errors.append(f"{i}번째 행: 컬럼 부족 — {row}")
+            continue
+        name = (row[0] or "").strip().lower()
+        cat = (row[1] or "").strip()
+        desc = (row[2] or "").strip() if len(row) >= 3 else ""
+        if not name or not cat:
+            continue
+        catmap[name] = (cat, desc)
+    return catmap, errors
 
 # (라벨, 옵션, 활성화, 그룹, 상세설명) — options.xlsx 가 없으면 이 셋으로 새로 만들어짐.
 # 그룹 == "" → 독립 체크박스. 그룹 != "" → 같은 그룹끼리 라디오 (택 1).
@@ -475,6 +643,8 @@ class NmapParserApp:
         here = _app_dir()
         self.options_xlsx_path = os.path.join(here, OPTIONS_XLSX_NAME)
         self.options_csv_path = os.path.join(here, OPTIONS_CSV_NAME)  # 구버전 호환
+        self.categories_xlsx_path = os.path.join(here, CATEGORIES_XLSX_NAME)
+        self.categories = {}      # {서비스명_lower: (분류, 설명)}
         self.option_rows = []     # 옵션 파일에서 읽은 행
         self.option_vars = []     # [{"kind", "var", "row", "group"}, ...]
         self.group_vars = {}      # group_name -> StringVar
@@ -498,6 +668,7 @@ class NmapParserApp:
         self._log_batch_limit = 120
 
         self._build_static_ui()
+        self._reload_categories(initial=True)
         self._reload_options(initial=True)
         self._refresh_nmap_button()
 
@@ -610,6 +781,12 @@ class NmapParserApp:
                   command=self._open_options_xlsx).pack(side="left", padx=2)
         tk.Button(opt_mgr, text="options.xlsx 폴더 열기",
                   command=lambda: subprocess.Popen(["explorer.exe", "/select,", self.options_xlsx_path])).pack(side="left", padx=2)
+        # categories 관리
+        tk.Button(opt_mgr, text="분류 다시 불러오기",
+                  command=lambda: self._reload_categories(initial=False),
+                  bg="#e3f2fd").pack(side="left", padx=(12, 2))
+        tk.Button(opt_mgr, text="categories.xlsx 열기 (Excel)",
+                  command=self._open_categories_xlsx).pack(side="left", padx=2)
         self.options_status = tk.Label(opt_mgr, text="", fg="#555")
         self.options_status.pack(side="left", padx=12)
 
@@ -884,6 +1061,46 @@ class NmapParserApp:
             os.startfile(self._log_file_path)  # type: ignore
         except OSError as e:
             messagebox.showerror("열기 실패", f"파일을 열 수 없음: {e}\n경로: {self._log_file_path}")
+
+    def _reload_categories(self, initial=False):
+        """categories.xlsx 로드. 없으면 기본값으로 자동 생성."""
+        if not os.path.isfile(self.categories_xlsx_path):
+            try:
+                write_default_categories_xlsx(self.categories_xlsx_path)
+            except OSError as e:
+                if not initial:
+                    messagebox.showerror("categories.xlsx 생성 실패",
+                        f"분류 파일을 만들 수 없습니다.\n원인: {e}\n경로: {self.categories_xlsx_path}")
+                self.categories = {}
+                return
+        catmap, errors = load_categories_xlsx(self.categories_xlsx_path)
+        if errors and not initial:
+            messagebox.showwarning("categories.xlsx 일부 행 무시",
+                "\n".join("• " + e for e in errors))
+        self.categories = catmap
+        if not initial:
+            self.status_var.set(f"분류 다시 불러옴 ({len(catmap)}개)")
+
+    def _open_categories_xlsx(self):
+        if not os.path.isfile(self.categories_xlsx_path):
+            try:
+                write_default_categories_xlsx(self.categories_xlsx_path)
+            except OSError as e:
+                messagebox.showerror("열기 실패", f"파일을 만들 수 없습니다: {e}")
+                return
+        try:
+            os.startfile(self.categories_xlsx_path)  # type: ignore
+        except OSError as e:
+            messagebox.showerror("열기 실패", f"파일을 열 수 없음: {e}")
+
+    def _lookup_category(self, probed_name, guessed_name):
+        """확인서비스(short) 또는 추측서비스 이름으로 분류 lookup. 둘 다 실패면 '미분류'."""
+        for n in (probed_name, guessed_name):
+            if n:
+                key = n.rstrip("?").strip().lower()
+                if key and key in self.categories:
+                    return self.categories[key][0]
+        return "미분류"
 
     def _open_options_xlsx(self):
         if not os.path.isfile(self.options_xlsx_path):
@@ -1489,28 +1706,34 @@ class NmapParserApp:
                     product = svc_el.get("product", "") or ""
                     version = svc_el.get("version", "") or ""
                     extrainfo = svc_el.get("extrainfo", "") or ""
+                    ostype = svc_el.get("ostype", "") or ""
                     if method == "probed":
-                        merged = " ".join(p for p in (name, product, version, extrainfo) if p)
-                        probed = merged.strip()
+                        probed_short = name
                     elif method == "table":
-                        probed = f"{name}?" if name else ""
+                        probed_short = f"{name}?" if name else ""
                     else:
-                        probed = name
+                        probed_short = name
+                    detail = " ".join(p for p in (product, version, extrainfo, ostype) if p).strip()
                 else:
-                    probed = ""
+                    probed_short = ""
+                    detail = ""
+
+                category = self._lookup_category(probed_short, guessed)
+
                 scripts = port.findall("script")
                 if not scripts:
-                    rows.append([addr, portid, state, guessed, probed, "", ""])
+                    rows.append([addr, portid, state, guessed, probed_short, category, detail, "", ""])
                 else:
                     for sc in scripts:
                         sid = sc.get("id", "") or ""
                         out = (sc.get("output", "") or "").replace("\r", " ").replace("\n", " | ")
-                        rows.append([addr, portid, state, guessed, probed, sid, out])
+                        rows.append([addr, portid, state, guessed, probed_short, category, detail, sid, out])
 
         csv_path = (self.output_prefix or "") + ".csv"
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["IP", "PORT", "포트상태", "추측서비스(table)", "확인서비스(probed)",
+            w.writerow(["IP", "PORT", "포트상태",
+                        "추측서비스", "확인서비스(short)", "분류", "상세(제품/버전)",
                         "NSE스크립트명", "스크립트출력"])
             for r in rows:
                 w.writerow(r)
