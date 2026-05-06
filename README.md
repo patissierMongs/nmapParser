@@ -1,155 +1,76 @@
 # nmapParser
 
-> A Korean-friendly nmap GUI for non-technical users — manage scan options through Excel, see real-time scan progress, and get parseable CSV output that distinguishes guessed services from probed ones.
+> **비기술 점검자/관리자용 nmap GUI** — 한국어 라벨, Excel 로 옵션 관리, CSV 결과는 분류·식별·비고가 자동 채워져 그대로 보고서 베이스로 쓸 수 있습니다.
 
-🇰🇷 **한국어 버전**: [README.ko.md](./README.ko.md)
+🇬🇧 *English version: [README.en.md](./README.en.md)*
 
 ![nmapParser GUI](./screenshot_readme.png)
 
 ---
 
-## Why this exists
+## 30초 요약
 
-Most nmap GUIs (Zenmap, etc.) expose the same English flags as the CLI. For someone who isn't already comfortable with `-sS`, `--version-all`, `--script smb-os-discovery`, that's a tall wall. nmapParser was built for the opposite end of the spectrum:
+1. **타깃 입력 → ▶ 스캔 시작.** GUI default 가 사용자 점검 표준 (`phase1`) 명령을 그대로 조립합니다.
+2. **결과 CSV 12컬럼.** Excel 로 열어 `분류`/`용도`/`식별` 필터만 걸어도 90% 정리 끝.
+3. **옵션은 Excel 로 관리.** `options.xlsx` / `categories.xlsx` 행 추가만 하면 GUI 가 바로 반영.
 
-- **Korean labels and tooltips** for every option, rendered alongside the actual nmap flag.
-- **Excel-managed option list** so end users can add, remove, or re-label scan options without touching code.
-- **CSV output that separates "what nmap guessed" from "what nmap actually probed"** — a `?` suffix flags every port where probe failed (e.g. `microsoft-ds?`), so the user immediately knows the result is unverified.
-- **Pure Python standard library** — no `pip install` required. Drop the folder on any Windows machine with Python 3.x and nmap, double-click the `.bat`, you're scanning.
+![CSV 결과 예시](./screenshot_csv_sample.png)
 
-## Features
+## 빠른 시작
 
-| Area | Detail |
+**Option A — `.exe` 한 파일 (Python 불필요)**
+1. nmap 설치: <https://nmap.org/download.html>
+2. [Releases](https://github.com/patissierMongs/nmapParser/releases/latest) 에서 `nmapParser.exe` 다운로드
+3. 더블클릭. 첫 실행 시 `options.xlsx` / `categories.xlsx` 자동 생성
+
+**Option B — 소스에서**
+```
+git clone https://github.com/patissierMongs/nmapParser.git
+cd nmapParser
+python nmapParser.py    # 또는 nmapParser.bat
+```
+
+## 핵심 기능
+
+- **한국어 GUI + 옵션마다 hover 툴팁.**
+- **체크박스 + 라디오 그룹** (TCP 스캔 타입 / 속도 — 같은 그룹 = 택1).
+- **`phase1` 표준 명령 default.** SYN+버전식별+UDP 26포트+NSE 19개 한 번에.
+- **다중 `-p` 자동 합치기.** TCP 풀 + UDP 행 둘 다 켜도 단일 `-p T:...,U:...`.
+- **실시간 로그** (최근 275줄 화면 / 전체는 `.log` 파일) + `--stats-every 1m` 자동 추가로 buffer 멈춤 방지.
+- **창 닫기 시 nmap 자동 종료** (좀비 프로세스 방지).
+
+## CSV 12컬럼
+
+| 컬럼 | 의미 |
 |---|---|
-| **GUI** | tkinter, all labels in Korean, hover tooltips with detailed Korean explanations of every option |
-| **Options via Excel** | `options.xlsx` with 5 columns: `스캔 옵션`(label) / `옵션`(nmap arg) / `활성화`(0/1) / `그룹`(radio group name) / `상세설명`(tooltip text) |
-| **Radio groups** | Same `그룹` value → mutually-exclusive radio buttons. Built-in: `TCP 스캔 타입` (SYN/Connect/Null/FIN/Xmas/ACK), `속도` (T0–T5) |
-| **Scan options auto-classify** | Rows whose option starts with `--script` → NSE panel (right). Other options → basic panel (left) |
-| **Auto window sizing** | Window height grows with the option count up to your screen limit; only past that does the panel scrollbar matter |
-| **Targets** | Multi-line text box (free-form IPs, CIDRs, hostnames). `📁 파일에서 불러오기` button reads `.txt` (one target per line) |
-| **Real-time progress** | `--stats-every 1m` is added by default — nmap forces a progress line every minute, so the GUI log never appears stuck even when stdout is buffered |
-| **Log buffer** | The on-screen log keeps the most recent 275 lines (rolling); the **complete** stdout is saved to `<output>/<target>_<timestamp>.log`, openable from the `전체 로그 보기 (.log)` button |
-| **CSV export** | 9-column CSV: IP / PORT / 포트상태 / 추측서비스 / 확인서비스(short) / **분류** / 상세(제품/버전) / NSE스크립트명 / 스크립트출력. Categories driven by editable `categories.xlsx` (~95 entries) |
-| **Auto nmap detection** | Looks for `C:\Program Files (x86)\Nmap\nmap.exe`, then `C:\Program Files\Nmap\nmap.exe`, then a sibling `nmap.exe`. Manual selection (red button) if not found |
-| **Migration** | Old `options.csv` is auto-migrated to `options.xlsx` on first run; original is kept as `options.csv.bak` |
-| **Excel safety** | All cells use shared-string encoding so values like `-Pn`, `--version-all`, `=SUM(...)`, `+x`, `@y` are never interpreted as formulas (no `#NAME?` errors, no recovery prompt) |
+| IP, PORT, 포트상태 | nmap 기본 |
+| **추측서비스** | 포트번호 룩업 (`nmap-services`) |
+| **확인서비스(short)** | XML `<service>@name`. probe 실패 시 `?` |
+| **식별** | `확인` / `추측` / `tcpwrapped` / `미확인` 4값 |
+| **분류** | `웹` / `원격접속` / `DBMS` / `RPC` / ... (categories.xlsx) |
+| **용도** | `관리` / `사용자` / `시스템` / `모니터링` / ... |
+| **상세(제품/버전)** | `OpenSSH 9.6p1 Ubuntu...` 등 verbose |
+| **비고** | 자동 요약 한 줄 — detail + NSE 핵심 (CN, OS, hostname, title) |
+| NSE스크립트명, 스크립트출력 | NSE raw 결과 |
 
-## Quick start
+> **이 도구는 관찰까지.** 우선순위·노출 평가·권고 같은 판단은 의도적으로 생성하지 않습니다 — 사람의 영역.
 
-### Option A — Standalone .exe (no Python required)
+### 두 컬럼 비교가 핵심
+- 22000번 포트 추측서비스 = `snapenetio` 인데 확인서비스(short) = `ssh` 라면 → 추측이 틀렸음.
+- 확인서비스(short) 가 `microsoft-ds?` 처럼 `?` 로 끝나면 → probe 시도했지만 실패. **추측만 가지고 판단 금지** 의 신호.
 
-1. Install **nmap**: <https://nmap.org/download.html>.
-2. Download `nmapParser.exe` from the [Releases page](https://github.com/patissierMongs/nmapParser/releases/latest).
-3. Double-click. `options.xlsx` is auto-created next to the .exe on first run.
+## Excel 로 옵션 관리
 
-### Option B — From source (Python)
+GUI 의 `options.xlsx 열기 (Excel)` → 행 추가/편집 → 저장 → `옵션 다시 불러오기` 클릭.
 
-1. Install **Python 3.x** (with `pythonw` — the Windows installer enables it by default).
-2. Install **nmap**: <https://nmap.org/download.html>.
-3. Clone:
-   ```
-   git clone https://github.com/patissierMongs/nmapParser.git
-   cd nmapParser
-   ```
-4. Double-click **`nmapParser.bat`** (or run `python nmapParser.py`).
-
-On the first launch, `options.xlsx` is auto-created with sensible defaults (37 options including the radio groups). No further setup is needed.
-
-## Configuration via Excel
-
-Open `options.xlsx` from the `options.xlsx 열기 (Excel)` button inside the app, edit, save, click `옵션 다시 불러오기`. The window resizes itself to fit the new option count.
-
-| Column | Meaning |
-|---|---|
-| `스캔 옵션` | Label shown on the checkbox/radio |
-| `옵션` | The actual nmap argument (e.g. `-Pn`, `--max-retries 2`, `--script ssh-hostkey`) |
-| `활성화` | `1` = checked by default, `0` = unchecked |
-| `그룹` | Empty → standalone checkbox. Same value → radio group (one selection) |
-| `상세설명` | Tooltip text shown on hover. Empty → no tooltip |
-
-A row whose `옵션` starts with `--script` is automatically placed in the NSE panel. `-oA / -oX / -oN / -oG` output flags are ignored if you write them — the app always manages output paths itself.
-
-### Adding a new option
-
-1. Click `options.xlsx 열기 (Excel)`.
-2. Append a new row, e.g. `["Aggressive scan", "-A", "0", "", "OS detection + version + default NSE + traceroute combo"]`.
-3. Save. Back in the app, click `옵션 다시 불러오기`. The new checkbox appears immediately.
-
-## CSV output
-
-The CSV that comes out of a scan has these 12 columns — **observable facts only, no judgment**:
-
-`IP, PORT, 포트상태, 추측서비스, 확인서비스(short), 식별, 분류, 용도, 상세(제품/버전), 비고, NSE스크립트명, 스크립트출력`
-
-| Column | Source | Meaning |
+| 파일 | 컬럼 | 용도 |
 |---|---|---|
-| **추측서비스** | `nmap-services` file lookup by port number | Static port→name mapping (e.g. `ssh`, `http`, `microsoft-ds`). Always populated. |
-| **확인서비스(short)** | XML `<service>@name` only | The service name nmap actually identified — `ssh`, `http`, `msrpc`. With `?` suffix when probe failed (`microsoft-ds?`). Empty when nothing detected. |
-| **식별** | XML `<service>@method` analysis | Identification status — 4 values (see below). |
-| **분류** | `categories.xlsx` lookup | Korean category — `웹` / `원격접속` / `DBMS` / `파일공유` / `메일` / `RPC` / etc. |
-| **용도** | `categories.xlsx` lookup | Observational role — `관리` / `사용자` / `시스템` / `모니터링` / `내부통신` / `개발` / `보안` / `인프라`. |
-| **상세(제품/버전)** | XML `<service>` `@product` + `@version` + `@extrainfo` + `@ostype` joined | Verbose detail kept separate from the short name. |
-| **비고** | auto-generated one-liner | Detail string + 1~2 NSE key lines (CN, OS, hostname, etc.), comma-joined. **Single line only — never multi-line.** |
-| NSE스크립트명 | XML `<script>@id` | Matched NSE script ID. Multiple matches → multiple rows for the same port. |
-| 스크립트출력 | XML `<script>@output` | NSE script raw output (newlines replaced with ` \| `). |
+| `options.xlsx` | 스캔 옵션 / 옵션 / 활성화 / 그룹 / 상세설명 | 체크박스/라디오/툴팁 |
+| `categories.xlsx` | 서비스명 / 분류 / 용도 / 설명 | CSV 의 `분류` / `용도` 자동 채움 (~95 항목 기본 동봉) |
 
-### 식별 column — 4 values
+## 기준 명령 (`phase1`)
 
-| Value | Meaning |
-|---|---|
-| `확인` | `<service @method="probed">` — nmap probed and got a product/version match |
-| `추측` | `<service @method="table">` — port→name lookup only (probe attempted but failed; usually has `?` in 확인서비스(short)) |
-| `tcpwrapped` | `<service @name="tcpwrapped">` — port responds to handshake but won't engage with probes |
-| `미확인` | no `<service>` element, or `name="unknown"` |
-
-### 비고 column — auto-generated one-liner
-
-Built per port (the same value repeats across NSE multi-rows):
-1. **First**: the `상세(제품/버전)` value (e.g. `Apache httpd 2.4.58`).
-2. **Then**: 1~2 key lines from NSE results, picked by script ID:
-   - `ssl-cert` → `CN=...`
-   - `smb-os-discovery` → `OS=...` or `host=...`
-   - `rdp-ntlm-info` → `DNS_Computer_Name=...` or `Target_Name=...`
-   - `nbstat` → `host=...`
-   - `http-title` → `title=...`
-3. **Empty** if no detail and no NSE match.
-
-The two parts are joined with `, `. Each part trimmed to 80 chars max. **No newlines** — Excel rows stay one line tall.
-
-> **Scope of this tool — observation only.** The CSV records what nmap saw. Judgment calls (priority, exposure assessment, recommended fixes) are intentionally *not* generated here — they belong to the human reviewer or to a downstream tool. `분류` and `용도` are descriptive labels, not risk scores.
-
-The split between **확인서비스(short)** and **상세(제품/버전)** is deliberate: the short column is the Excel filter/sort key, the detail column carries the verbose product/version string. With **분류** + **용도** you can filter the CSV to "웹 only" / "DBMS only" / "관리 용도만 보기" with one click in Excel.
-
-### categories.xlsx — observational classification
-
-| 서비스명 | 분류 | 용도 | 설명 |
-|---|---|---|---|
-| ssh | 원격접속 | 관리 | SSH 원격 셸/관리 접속 |
-| http | 웹 | 사용자 | HTTP 웹 서버 |
-| mysql | DBMS | 시스템 | MySQL/MariaDB |
-| snmp | 모니터링 | 모니터링 | SNMP |
-| amqp | 메시지큐 | 내부통신 | RabbitMQ AMQP |
-| ipmi | 관리 | 관리 | IPMI BMC 관리 |
-| ... | ... | ... | ... |
-
-About 95 entries auto-shipped. Edit `categories.xlsx` in Excel and click `분류 다시 불러오기` to add your own. All four columns are observational — no risk/priority/recommendation fields.
-
-### Two-column "guess vs probe" intent
-The `추측서비스` and `확인서비스(short)` columns preserve the original intent: when port `22000` shows `snapenetio` (table guess) but `확인서비스(short)` is empty/different, you know the table was wrong. When `확인서비스(short)` ends in `?`, you know nmap probed but couldn't identify — `microsoft-ds?` means "we tried, failed, and the table guess is all you have."
-
-### Real-world example from a localhost scan
-
-| PORT | 확인서비스(short) | 식별 | 분류 | 용도 | 비고 |
-|---|---|---|---|---|---|
-| 22 | `ssh` | 확인 | 원격접속 | 관리 | `OpenSSH 9.6p1 Ubuntu 3ubuntu13.16 Ubuntu Linux` |
-| 135 | `msrpc` | 확인 | RPC | 시스템 | `Microsoft Windows RPC Windows` |
-| 445 | `microsoft-ds?` | 추측 | 파일공유 | 시스템 | (empty) |
-| 3389 | `ms-wbt-server?` | 추측 | 원격접속 | 관리 | `DNS_Computer_Name=yuyu, CN=yuyu` |
-| 5040 | (empty) | 미확인 | 미분류 | (empty) | (empty) |
-
-### Reference scan command (`phase1`)
-
-The default option set is sized to assemble this command **out of the box** — open the GUI, type a target, click ▶ Scan:
+GUI default 만으로 정확히 이 명령이 조립됩니다 — 타깃 입력 후 ▶ 클릭:
 
 ```
 nmap -Pn -n -sS -sU -sV --version-all \
@@ -162,57 +83,38 @@ nmap -Pn -n -sS -sU -sV --version-all \
                nbstat,smb-os-discovery,smb-protocols,rpcinfo,
                fingerprint-strings' \
      -T4 --max-retries 2 --reason --open --defeat-rst-ratelimit \
-     -oA phase1 <TARGET>
+     -oA phase1 <대역>
 ```
 
-The GUI merges multiple `-p` rows automatically — "TCP 모든 포트 (1-65535)" + "UDP 주요 포트 스캔" both ON produces the single combined `-p T:...,U:...` arg above. NSE rows are concatenated into a single `--script` arg with deduplication.
+## 변경 이력
 
-## Tech stack
+<details>
+<summary><b>v0.2 — 안정성 (현재)</b></summary>
 
-Pure Python standard library:
+- 좀비 nmap 방지 (창 닫기 시 자식 프로세스 정리)
+- 스캔 중지 시 친절 popup (XML ParseError 안 뜸)
+- 다중 `-p` 자동 합치기
+- xlsx XML invalid control char sanitize
+- IP octet 검증 (`192.168.1.999` 거부)
+- styles.xml OOXML strict 준수 (openpyxl 경고 0)
+- CSV 에 식별/비고 컬럼 추가 (12컬럼)
+</details>
 
-`tkinter` (GUI) · `subprocess` + `threading` (live nmap process) · `xml.etree.ElementTree` (parsing nmap XML) · `csv` (CSV export) · `zipfile` + `xml.etree` (custom xlsx reader/writer in `xlsx_io.py` to avoid any pip dependency and to dodge Excel's CSV formula-interpretation pitfall) · `shlex` (option string parsing) · `os.startfile` (open files in their default Windows app)
+<details>
+<summary><b>v0.1 — 첫 릴리즈</b></summary>
 
-No `pip install` anywhere.
+- Windows 단독 실행 `.exe` (PyInstaller, ~10.7 MB)
+- 10컬럼 CSV (IP/PORT/포트상태/추측·확인서비스/분류/용도/상세/NSE)
+- options.xlsx 5컬럼 + categories.xlsx 4컬럼 Excel 편집
+- 라디오 그룹 + 체크박스 grid + 한국어 툴팁
+</details>
 
-## Files
+## 한계
 
-| File | Purpose |
-|---|---|
-| `nmapParser.py` | Main GUI app |
-| `xlsx_io.py` | stdlib-only xlsx reader/writer (shared-string cells) |
-| `options.xlsx` | Editable option list (auto-created on first run) |
-| `nmapParser.bat` | Double-click launcher (`pythonw` preferred, falls back to `python`) |
-| `README.md` / `README.ko.md` | This document |
+- `-sS` 는 관리자 권한 필요. 일반 사용자는 라디오에서 `Connect` 선택.
+- 구버전 nmap 에 없는 NSE 는 nmap 이 무시 또는 경고만.
+- IPv6-only 호스트는 CSV `IP` 컬럼에 IPv6 주소 그대로.
 
-## Known limits
+## 라이선스 / 만든 사람
 
-- `-sS` (TCP SYN scan) needs administrator privileges. As an unprivileged user, pick the `Connect (-sT)` radio in the `TCP 스캔 타입` group instead.
-- Some NSE scripts may not exist in older nmap versions; nmap silently ignores or warns and continues.
-- IPv6-only hosts will appear in the CSV `IP` column with their IPv6 address.
-
-## Changelog
-
-### v0.2 — stability + safety
-- **H-1** Closing the GUI mid-scan no longer leaves a zombie `nmap.exe`. The window's close handler asks for confirmation, then `terminate()` → `wait(3s)` → `kill()` cascade.
-- **H-2** Stopping a scan via the ■ Stop button now skips CSV conversion and shows a friendly "스캔 중지" popup with the partial files listed (no more confusing XML ParseError dialog).
-- **H-3** Multiple `-p` rows (TCP / UDP / user input) are auto-merged into a single `-p T:...,U:...` arg.
-- **M-1** `xlsx_io` now strips XML-1.0-invalid control chars (`\x00`-`\x08`, `\x0b\x0c`, `\x0e`-`\x1f`) on write — NSE outputs with raw bytes no longer cause read-time ParseError.
-- **M-2** `styles.xml` aligned with OOXML strict spec — opens with zero warnings in openpyxl.
-- **M-6** Target validation rejects out-of-range IPs (e.g. `192.168.1.999`, `/40`) instead of falling through to hostname.
-- Removed dead `_clear_group` method and corrected stale "inline string" docstring.
-
-### v0.1 — first release
-- Standalone Windows `.exe` (PyInstaller onefile, ~10.7 MB)
-- 12-column CSV (IP/PORT/포트상태/추측서비스/확인서비스(short)/식별/분류/용도/상세/비고/NSE/출력)
-- `options.xlsx` (5-col: label/option/enable/group/desc) and `categories.xlsx` (4-col: name/category/usage/desc) — both Excel-editable
-- Radio groups (TCP scan type, speed) + checkbox grid layout
-- Korean tooltips on every option
-
-## License
-
-MIT — see [LICENSE](./LICENSE).
-
-## Author
-
-Made by [@patissierMongs](https://github.com/patissierMongs).
+MIT — [LICENSE](./LICENSE) · [@patissierMongs](https://github.com/patissierMongs)
