@@ -191,6 +191,24 @@ No `pip install` anywhere.
 - Some NSE scripts may not exist in older nmap versions; nmap silently ignores or warns and continues.
 - IPv6-only hosts will appear in the CSV `IP` column with their IPv6 address.
 
+## Changelog
+
+### v0.2 — stability + safety
+- **H-1** Closing the GUI mid-scan no longer leaves a zombie `nmap.exe`. The window's close handler asks for confirmation, then `terminate()` → `wait(3s)` → `kill()` cascade.
+- **H-2** Stopping a scan via the ■ Stop button now skips CSV conversion and shows a friendly "스캔 중지" popup with the partial files listed (no more confusing XML ParseError dialog).
+- **H-3** Multiple `-p` rows (TCP / UDP / user input) are auto-merged into a single `-p T:...,U:...` arg.
+- **M-1** `xlsx_io` now strips XML-1.0-invalid control chars (`\x00`-`\x08`, `\x0b\x0c`, `\x0e`-`\x1f`) on write — NSE outputs with raw bytes no longer cause read-time ParseError.
+- **M-2** `styles.xml` aligned with OOXML strict spec — opens with zero warnings in openpyxl.
+- **M-6** Target validation rejects out-of-range IPs (e.g. `192.168.1.999`, `/40`) instead of falling through to hostname.
+- Removed dead `_clear_group` method and corrected stale "inline string" docstring.
+
+### v0.1 — first release
+- Standalone Windows `.exe` (PyInstaller onefile, ~10.7 MB)
+- 12-column CSV (IP/PORT/포트상태/추측서비스/확인서비스(short)/식별/분류/용도/상세/비고/NSE/출력)
+- `options.xlsx` (5-col: label/option/enable/group/desc) and `categories.xlsx` (4-col: name/category/usage/desc) — both Excel-editable
+- Radio groups (TCP scan type, speed) + checkbox grid layout
+- Korean tooltips on every option
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

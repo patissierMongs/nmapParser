@@ -25,6 +25,19 @@ import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape as xml_escape
 
 
+# XML 1.0 spec 에서 invalid control char (write 시 전부 제거).
+# NSE 출력 등에 가끔 \x00, \x01, \x07 같은 것 들어와서 read 시 ParseError 유발.
+# 허용: \t (\x09), \n (\x0a), \r (\x0d). 그 외 \x00-\x08, \x0b, \x0c, \x0e-\x1f 모두 제거.
+_XML_INVALID_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _sanitize_xml_text(s):
+    """XML 1.0 invalid control char 제거. None 은 빈 문자열로."""
+    if s is None:
+        return ""
+    return _XML_INVALID_RE.sub("", str(s))
+
+
 # ---------------------------------------------------------------- helpers
 
 def col_letter(idx):
@@ -140,21 +153,29 @@ WORKBOOK_RELS_XML = (
     '</Relationships>'
 )
 
-# style 0 = default, style 1 = bold
+# OOXML 스펙 준수 — openpyxl "no default style" 같은 경고도 안 뜸.
+# style 0 = default, style 1 = bold (헤더용).
 STYLES_XML = (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
     '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+    '<numFmts count="0"/>'
     '<fonts count="2">'
-    '<font><sz val="11"/><name val="Calibri"/></font>'
-    '<font><b/><sz val="11"/><name val="Calibri"/></font>'
+    '<font><sz val="11"/><name val="Calibri"/><family val="2"/></font>'
+    '<font><b/><sz val="11"/><name val="Calibri"/><family val="2"/></font>'
     '</fonts>'
-    '<fills count="1"><fill><patternFill patternType="none"/></fill></fills>'
-    '<borders count="1"><border/></borders>'
-    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0"/></cellStyleXfs>'
+    '<fills count="2">'
+    '<fill><patternFill patternType="none"/></fill>'
+    '<fill><patternFill patternType="gray125"/></fill>'
+    '</fills>'
+    '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
     '<cellXfs count="2">'
-    '<xf numFmtId="0" fontId="0" xfId="0"/>'
-    '<xf numFmtId="0" fontId="1" xfId="0" applyFont="1"/>'
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+    '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
     '</cellXfs>'
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+    '<dxfs count="0"/>'
+    '<tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>'
     '</styleSheet>'
 )
 
@@ -224,8 +245,10 @@ def _build_shared_strings_xml(shared_str_idx):
         f' count="{count}" uniqueCount="{count}">'
     )
     for text, _ in items:
-        escaped = xml_escape(text)
-        preserve = ' xml:space="preserve"' if (text and text != text.strip()) else ''
+        # XML invalid control char 제거 (NSE 출력 등 \x00, \x07 같은 것 방지)
+        clean_text = _sanitize_xml_text(text)
+        escaped = xml_escape(clean_text)
+        preserve = ' xml:space="preserve"' if (clean_text and clean_text != clean_text.strip()) else ''
         parts.append(f'<si><t{preserve}>{escaped}</t></si>')
     parts.append('</sst>')
     return ''.join(parts)

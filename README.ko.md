@@ -192,6 +192,24 @@ Python 표준 라이브러리만:
 - 일부 NSE 스크립트는 구버전 nmap 에 없을 수 있음. nmap 이 무시하거나 경고만 띄움.
 - IPv6 전용 호스트는 CSV 의 `IP` 컬럼에 IPv6 주소가 그대로 들어감.
 
+## 변경 이력
+
+### v0.2 — 안정성 + 안전성
+- **H-1** 스캔 중 GUI 닫기 → 좀비 `nmap.exe` 더 이상 남지 않음. 확인 popup 후 `terminate()` → `wait(3초)` → `kill()` cascade.
+- **H-2** ■ 중지 버튼 → CSV 변환 skip + 친절한 "스캔 중지" popup (부분 파일 목록 포함). XML ParseError 다이얼로그 더 이상 안 뜸.
+- **H-3** 다중 `-p` 행 (TCP / UDP / 사용자 입력) 이 단일 `-p T:...,U:...` 로 자동 합쳐짐.
+- **M-1** `xlsx_io` 가 write 시점에 XML-1.0 invalid control char (`\x00`-`\x08`, `\x0b\x0c`, `\x0e`-`\x1f`) 제거 — NSE raw 바이트 출력이 read 시 ParseError 일으키지 않음.
+- **M-2** `styles.xml` 을 OOXML strict spec 에 맞춤 — openpyxl 로 열어도 경고 0건.
+- **M-6** 타깃 검증이 octet/prefix 범위 벗어난 IP (예: `192.168.1.999`, `/40`) 를 hostname 으로 잘못 통과시키지 않음.
+- 사용 안 하는 `_clear_group` 메서드 제거, "inline string" docstring 을 "shared string" 으로 정정.
+
+### v0.1 — 첫 릴리즈
+- Windows 단독 실행 `.exe` (PyInstaller onefile, ~10.7 MB)
+- 12컬럼 CSV (IP/PORT/포트상태/추측서비스/확인서비스(short)/식별/분류/용도/상세/비고/NSE/출력)
+- `options.xlsx` (5컬럼: 라벨/옵션/활성화/그룹/상세설명) + `categories.xlsx` (4컬럼: 서비스명/분류/용도/설명) Excel 편집 가능
+- 라디오 그룹 (TCP 스캔 타입, 속도) + 체크박스 grid 레이아웃
+- 모든 옵션에 한국어 툴팁
+
 ## 라이선스
 
 MIT — [LICENSE](./LICENSE) 참조.
