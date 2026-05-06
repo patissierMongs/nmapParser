@@ -36,9 +36,17 @@
 
 ## 빠른 시작
 
+### 방법 A — 단독 실행 .exe (Python 설치 불필요)
+
+1. **nmap** 설치: <https://nmap.org/download.html>.
+2. [Releases 페이지](https://github.com/patissierMongs/nmapParser/releases/latest) 에서 `nmapParser.exe` 다운로드.
+3. 더블클릭. 첫 실행 시 `options.xlsx` 가 .exe 옆 폴더에 자동 생성됨.
+
+### 방법 B — 소스에서 (Python 사용)
+
 1. **Python 3.x** 설치 (`pythonw` 포함 — Windows 인스톨러 기본값).
 2. **nmap** 설치: <https://nmap.org/download.html>.
-3. clone 또는 다운로드:
+3. clone:
    ```
    git clone https://github.com/patissierMongs/nmapParser.git
    cd nmapParser

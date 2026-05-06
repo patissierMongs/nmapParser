@@ -36,9 +36,17 @@ Most nmap GUIs (Zenmap, etc.) expose the same English flags as the CLI. For some
 
 ## Quick start
 
+### Option A — Standalone .exe (no Python required)
+
+1. Install **nmap**: <https://nmap.org/download.html>.
+2. Download `nmapParser.exe` from the [Releases page](https://github.com/patissierMongs/nmapParser/releases/latest).
+3. Double-click. `options.xlsx` is auto-created next to the .exe on first run.
+
+### Option B — From source (Python)
+
 1. Install **Python 3.x** (with `pythonw` — the Windows installer enables it by default).
 2. Install **nmap**: <https://nmap.org/download.html>.
-3. Clone or download:
+3. Clone:
    ```
    git clone https://github.com/patissierMongs/nmapParser.git
    cd nmapParser
