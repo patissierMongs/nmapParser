@@ -1,0 +1,34 @@
+# Outputs created by scans (timestamped subfolders)
+[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9]*/
+
+# Backups
+*.bak
+options.csv.bak
+
+# Development screenshots (only screenshot_readme.png is committed)
+screenshot_csv_full.png
+screenshot_csv_notepad.png
+screenshot_done_popup.png
+screenshot_full.png
+screenshot_full_done_popup.png
+screenshot_full_done_popup_*.png
+screenshot_gui_done.png
+screenshot_gui_full.png
+screenshot_initial.png
+screenshot_scan_done.png
+screenshot_v*.png
+
+# Logs
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
