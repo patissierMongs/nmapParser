@@ -244,7 +244,7 @@ ET_ParseError = ET.ParseError
 
 def find_nmap_exe():
     """기본 위치 -> 동봉 폴더 순으로 nmap.exe 탐색."""
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = _app_dir()
     candidates = [
         r"C:\Program Files (x86)\Nmap\nmap.exe",
         r"C:\Program Files\Nmap\nmap.exe",
@@ -307,6 +307,17 @@ def _quote_win(s):
     if s and not re.search(r"[\s\"<>|&^]", s):
         return s
     return '"' + s.replace('"', '\\"') + '"'
+
+
+def _app_dir():
+    """앱 베이스 폴더.
+    - 일반 Python 실행 시: 이 .py 파일이 있는 폴더
+    - PyInstaller onefile (.exe) 실행 시: .exe 가 있는 폴더 (sys.executable)
+      (`__file__` 은 임시 _MEI 폴더를 가리켜 options.xlsx 가 사라지므로 우회)
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 # ============================================================ tooltip
@@ -401,7 +412,7 @@ class NmapParserApp:
         # 1280px 기준 panel 폭 ~620px → 한 cell 200~220px → 3 col 적정
         self.panel_cols = 3
 
-        here = os.path.dirname(os.path.abspath(__file__))
+        here = _app_dir()
         self.options_xlsx_path = os.path.join(here, OPTIONS_XLSX_NAME)
         self.options_csv_path = os.path.join(here, OPTIONS_CSV_NAME)  # 구버전 호환
         self.option_rows = []     # 옵션 파일에서 읽은 행

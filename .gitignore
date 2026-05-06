@@ -26,6 +26,11 @@ __pycache__/
 *.pyc
 *.pyo
 
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
 # Editor / OS
 .vscode/
 .idea/
