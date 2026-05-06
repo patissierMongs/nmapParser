@@ -38,7 +38,11 @@ Most nmap GUIs (Zenmap, etc.) expose the same English flags as the CLI. For some
 
 1. Install **Python 3.x** (with `pythonw` — the Windows installer enables it by default).
 2. Install **nmap**: <https://nmap.org/download.html>.
-3. Place this folder anywhere — e.g. `C:\Users\<you>\claude\nmapParser\`.
+3. Clone or download:
+   ```
+   git clone https://github.com/patissierMongs/nmapParser.git
+   cd nmapParser
+   ```
 4. Double-click **`nmapParser.bat`** (or run `python nmapParser.py`).
 
 On the first launch, `options.xlsx` is auto-created with sensible defaults (37 options including the radio groups). No further setup is needed.

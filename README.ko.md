@@ -38,7 +38,11 @@
 
 1. **Python 3.x** 설치 (`pythonw` 포함 — Windows 인스톨러 기본값).
 2. **nmap** 설치: <https://nmap.org/download.html>.
-3. 이 폴더를 원하는 위치에 — 예: `C:\Users\<you>\claude\nmapParser\`.
+3. clone 또는 다운로드:
+   ```
+   git clone https://github.com/patissierMongs/nmapParser.git
+   cd nmapParser
+   ```
 4. **`nmapParser.bat`** 더블클릭 (또는 `python nmapParser.py`).
 
 처음 실행하면 `options.xlsx` 가 기본 옵션 셋으로 자동 생성됩니다 (라디오 그룹 포함 37개). 추가 설정 불필요.
