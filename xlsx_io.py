@@ -148,13 +148,16 @@ STYLES_XML = (
     '<font><sz val="11"/><name val="Calibri"/></font>'
     '<font><b/><sz val="11"/><name val="Calibri"/></font>'
     '</fonts>'
-    '<fills count="1"><fill><patternFill patternType="none"/></fill></fills>'
+    '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
     '<borders count="1"><border/></borders>'
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0"/></cellStyleXfs>'
     '<cellXfs count="2">'
     '<xf numFmtId="0" fontId="0" xfId="0"/>'
     '<xf numFmtId="0" fontId="1" xfId="0" applyFont="1"/>'
     '</cellXfs>'
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+    '<dxfs count="0"/>'
+    '<tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>'
     '</styleSheet>'
 )
 
@@ -197,6 +200,7 @@ def _build_sheet_xml(rows, shared_str_idx, col_widths=None):
             if val is None:
                 continue
             text = "" if val is None else str(val)
+            text = _sanitize_xml_text(text)
             # shared string 등록
             if text not in shared_str_idx:
                 shared_str_idx[text] = len(shared_str_idx)
@@ -229,6 +233,18 @@ def _build_shared_strings_xml(shared_str_idx):
         parts.append(f'<si><t{preserve}>{escaped}</t></si>')
     parts.append('</sst>')
     return ''.join(parts)
+
+
+def _sanitize_xml_text(text):
+    """XML 1.0 에서 금지된 control char 제거."""
+    if not text:
+        return text
+    out = []
+    for ch in text:
+        c = ord(ch)
+        if c in (0x9, 0xA, 0xD) or (0x20 <= c <= 0xD7FF) or (0xE000 <= c <= 0xFFFD) or (0x10000 <= c <= 0x10FFFF):
+            out.append(ch)
+    return "".join(out)
 
 
 def write_xlsx(path, rows, col_widths=None):
