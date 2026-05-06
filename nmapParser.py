@@ -48,147 +48,147 @@ CATEGORIES_XLSX_NAME = "categories.xlsx"
 
 
 # ============================================================ categories
-# (서비스명, 분류, 설명) — categories.xlsx 가 없으면 이 셋으로 새로 만들어짐.
-# 확인서비스(short) 또는 추측서비스 의 이름으로 lookup 해서 "분류" 컬럼 결정.
+# (서비스명, 분류, 용도, 설명) — categories.xlsx 가 없으면 이 셋으로 생성.
+# 객관적 관찰 분류만 — 권장노출/우선순위/권고 같은 판단은 외부(점검자/사용자)에서.
 DEFAULT_CATEGORIES = [
     # 원격 접속
-    ("ssh", "원격접속", "SSH 원격 셸/관리 접속"),
-    ("telnet", "원격접속", "Telnet 평문 원격"),
-    ("rdp", "원격접속", "Microsoft RDP"),
-    ("ms-wbt-server", "원격접속", "Microsoft RDP"),
-    ("vnc", "원격접속", "VNC 원격 화면"),
-    ("vnc-http", "원격접속", "VNC over HTTP"),
-    ("xrdp", "원격접속", "xrdp (Linux RDP)"),
+    ("ssh", "원격접속", "관리", "SSH 원격 셸/관리 접속"),
+    ("telnet", "원격접속", "관리", "Telnet 평문 원격"),
+    ("rdp", "원격접속", "관리", "Microsoft RDP"),
+    ("ms-wbt-server", "원격접속", "관리", "Microsoft RDP"),
+    ("vnc", "원격접속", "관리", "VNC 원격 화면"),
+    ("vnc-http", "원격접속", "관리", "VNC over HTTP"),
+    ("xrdp", "원격접속", "관리", "xrdp (Linux RDP)"),
     # 웹 / 프록시
-    ("http", "웹", "HTTP 웹 서버"),
-    ("http-alt", "웹", "HTTP 대체 포트"),
-    ("https", "웹", "HTTPS 암호화 웹"),
-    ("https-alt", "웹", "HTTPS 대체 포트"),
-    ("ssl/http", "웹", "HTTPS 암호화 웹"),
-    ("ssl/https", "웹", "HTTPS 암호화 웹"),
-    ("ajp13", "웹", "AJP13 Tomcat 백엔드"),
-    ("http-proxy", "프록시", "HTTP 프록시 (Squid 등)"),
-    ("socks", "프록시", "SOCKS 프록시"),
+    ("http", "웹", "사용자", "HTTP 웹 서버"),
+    ("http-alt", "웹", "사용자", "HTTP 대체 포트"),
+    ("https", "웹", "사용자", "HTTPS 암호화 웹"),
+    ("https-alt", "웹", "사용자", "HTTPS 대체 포트"),
+    ("ssl/http", "웹", "사용자", "HTTPS 암호화 웹"),
+    ("ssl/https", "웹", "사용자", "HTTPS 암호화 웹"),
+    ("ajp13", "웹", "내부통신", "AJP13 Tomcat 백엔드"),
+    ("http-proxy", "프록시", "인프라", "HTTP 프록시 (Squid 등)"),
+    ("socks", "프록시", "인프라", "SOCKS 프록시"),
     # 인쇄
-    ("ipp", "인쇄", "IPP 인쇄 (HTTP 기반)"),
-    ("printer", "인쇄", "LPD 인쇄"),
-    ("lpd", "인쇄", "LPD 인쇄"),
+    ("ipp", "인쇄", "사용자", "IPP 인쇄 (HTTP 기반)"),
+    ("printer", "인쇄", "사용자", "LPD 인쇄"),
+    ("lpd", "인쇄", "사용자", "LPD 인쇄"),
     # DBMS
-    ("mysql", "DBMS", "MySQL/MariaDB"),
-    ("mariadb", "DBMS", "MariaDB"),
-    ("postgresql", "DBMS", "PostgreSQL"),
-    ("postgres", "DBMS", "PostgreSQL"),
-    ("mongodb", "DBMS", "MongoDB"),
-    ("mongo", "DBMS", "MongoDB"),
-    ("redis", "DBMS", "Redis 키-값"),
-    ("ms-sql-s", "DBMS", "Microsoft SQL Server"),
-    ("ms-sql-m", "DBMS", "Microsoft SQL Server (monitor)"),
-    ("oracle-tns", "DBMS", "Oracle TNS Listener"),
-    ("elasticsearch", "DBMS", "Elasticsearch 검색엔진"),
-    ("couchdb", "DBMS", "Apache CouchDB"),
-    ("neo4j", "DBMS", "Neo4j 그래프 DB"),
-    ("influxdb", "DBMS", "InfluxDB 시계열"),
-    ("memcache", "DBMS", "Memcached"),
-    ("memcached", "DBMS", "Memcached"),
-    ("cassandra", "DBMS", "Cassandra"),
-    ("hbase", "DBMS", "HBase"),
+    ("mysql", "DBMS", "시스템", "MySQL/MariaDB"),
+    ("mariadb", "DBMS", "시스템", "MariaDB"),
+    ("postgresql", "DBMS", "시스템", "PostgreSQL"),
+    ("postgres", "DBMS", "시스템", "PostgreSQL"),
+    ("mongodb", "DBMS", "시스템", "MongoDB"),
+    ("mongo", "DBMS", "시스템", "MongoDB"),
+    ("redis", "DBMS", "시스템", "Redis 키-값"),
+    ("ms-sql-s", "DBMS", "시스템", "Microsoft SQL Server"),
+    ("ms-sql-m", "DBMS", "시스템", "Microsoft SQL Server (monitor)"),
+    ("oracle-tns", "DBMS", "시스템", "Oracle TNS Listener"),
+    ("elasticsearch", "DBMS", "시스템", "Elasticsearch 검색엔진"),
+    ("couchdb", "DBMS", "시스템", "Apache CouchDB"),
+    ("neo4j", "DBMS", "시스템", "Neo4j 그래프 DB"),
+    ("influxdb", "DBMS", "시스템", "InfluxDB 시계열"),
+    ("memcache", "DBMS", "시스템", "Memcached"),
+    ("memcached", "DBMS", "시스템", "Memcached"),
+    ("cassandra", "DBMS", "시스템", "Cassandra"),
+    ("hbase", "DBMS", "시스템", "HBase"),
     # 메시지큐
-    ("amqp", "메시지큐", "RabbitMQ AMQP"),
-    ("mqtt", "메시지큐", "MQTT"),
-    ("nats", "메시지큐", "NATS"),
-    ("kafka", "메시지큐", "Kafka"),
+    ("amqp", "메시지큐", "내부통신", "RabbitMQ AMQP"),
+    ("mqtt", "메시지큐", "내부통신", "MQTT"),
+    ("nats", "메시지큐", "내부통신", "NATS"),
+    ("kafka", "메시지큐", "내부통신", "Kafka"),
     # 메일
-    ("smtp", "메일", "SMTP 송신"),
-    ("submission", "메일", "SMTP submission"),
-    ("smtps", "메일", "SMTPS"),
-    ("pop3", "메일", "POP3"),
-    ("pop3s", "메일", "POP3S"),
-    ("imap", "메일", "IMAP"),
-    ("imaps", "메일", "IMAPS"),
+    ("smtp", "메일", "시스템", "SMTP 송신"),
+    ("submission", "메일", "사용자", "SMTP submission"),
+    ("smtps", "메일", "시스템", "SMTPS"),
+    ("pop3", "메일", "사용자", "POP3"),
+    ("pop3s", "메일", "사용자", "POP3S"),
+    ("imap", "메일", "사용자", "IMAP"),
+    ("imaps", "메일", "사용자", "IMAPS"),
     # 디렉토리 / 인증
-    ("ldap", "디렉토리", "LDAP 디렉토리"),
-    ("ldaps", "디렉토리", "LDAPS"),
-    ("kerberos-sec", "인증", "Kerberos KDC"),
-    ("kpasswd", "인증", "Kerberos kpasswd"),
+    ("ldap", "디렉토리", "시스템", "LDAP 디렉토리"),
+    ("ldaps", "디렉토리", "시스템", "LDAPS"),
+    ("kerberos-sec", "인증", "시스템", "Kerberos KDC"),
+    ("kpasswd", "인증", "시스템", "Kerberos kpasswd"),
     # DNS
-    ("domain", "DNS", "DNS"),
-    ("dns", "DNS", "DNS"),
+    ("domain", "DNS", "인프라", "DNS"),
+    ("dns", "DNS", "인프라", "DNS"),
     # 파일 공유 / 전송
-    ("microsoft-ds", "파일공유", "SMB Microsoft 파일공유"),
-    ("netbios-ssn", "파일공유", "NetBIOS Session"),
-    ("netbios-ns", "파일공유", "NetBIOS Name"),
-    ("nbstat", "파일공유", "NetBIOS Status"),
-    ("nfs", "파일공유", "NFS"),
-    ("ftp", "파일전송", "FTP"),
-    ("ftps", "파일전송", "FTPS"),
-    ("tftp", "파일전송", "TFTP"),
-    ("sftp", "파일전송", "SFTP"),
+    ("microsoft-ds", "파일공유", "시스템", "SMB Microsoft 파일공유"),
+    ("netbios-ssn", "파일공유", "시스템", "NetBIOS Session"),
+    ("netbios-ns", "파일공유", "시스템", "NetBIOS Name"),
+    ("nbstat", "파일공유", "시스템", "NetBIOS Status"),
+    ("nfs", "파일공유", "시스템", "NFS"),
+    ("ftp", "파일전송", "사용자", "FTP"),
+    ("ftps", "파일전송", "사용자", "FTPS"),
+    ("tftp", "파일전송", "시스템", "TFTP"),
+    ("sftp", "파일전송", "사용자", "SFTP"),
     # 시간 / 모니터링 / 로그
-    ("ntp", "시간동기", "NTP"),
-    ("snmp", "모니터링", "SNMP"),
-    ("snmptrap", "모니터링", "SNMP Trap"),
-    ("zabbix-agent", "모니터링", "Zabbix Agent"),
-    ("zabbix-trapper", "모니터링", "Zabbix Trapper"),
-    ("prometheus", "모니터링", "Prometheus"),
-    ("grafana", "모니터링", "Grafana"),
-    ("syslog", "로그수집", "Syslog"),
-    ("splunk", "로그분석", "Splunk"),
+    ("ntp", "시간동기", "인프라", "NTP"),
+    ("snmp", "모니터링", "모니터링", "SNMP"),
+    ("snmptrap", "모니터링", "모니터링", "SNMP Trap"),
+    ("zabbix-agent", "모니터링", "모니터링", "Zabbix Agent"),
+    ("zabbix-trapper", "모니터링", "모니터링", "Zabbix Trapper"),
+    ("prometheus", "모니터링", "모니터링", "Prometheus"),
+    ("grafana", "모니터링", "사용자", "Grafana"),
+    ("syslog", "로그수집", "시스템", "Syslog"),
+    ("splunk", "로그분석", "보안", "Splunk"),
     # VPN / VoIP / 미디어
-    ("isakmp", "VPN", "IKE/IPsec"),
-    ("ipsec-nat-t", "VPN", "IPsec NAT-T"),
-    ("openvpn", "VPN", "OpenVPN"),
-    ("sip", "VoIP", "SIP"),
-    ("rtsp", "미디어", "RTSP"),
+    ("isakmp", "VPN", "시스템", "IKE/IPsec"),
+    ("ipsec-nat-t", "VPN", "시스템", "IPsec NAT-T"),
+    ("openvpn", "VPN", "시스템", "OpenVPN"),
+    ("sip", "VoIP", "사용자", "SIP"),
+    ("rtsp", "미디어", "사용자", "RTSP"),
     # 네트워크 검색
-    ("ssdp", "네트워크검색", "SSDP UPnP"),
-    ("upnp", "네트워크검색", "UPnP"),
-    ("mdns", "네트워크검색", "Multicast DNS"),
+    ("ssdp", "네트워크검색", "시스템", "SSDP UPnP"),
+    ("upnp", "네트워크검색", "시스템", "UPnP"),
+    ("mdns", "네트워크검색", "시스템", "Multicast DNS"),
     # RPC / 관리
-    ("msrpc", "RPC", "Microsoft RPC"),
-    ("rpcbind", "RPC", "ONC RPC portmapper"),
-    ("sunrpc", "RPC", "ONC RPC"),
-    ("nfs-or-iis", "RPC", "Microsoft RPC / NFS"),
-    ("ipmi", "관리", "IPMI BMC 관리"),
-    ("wsdapi", "관리", "WS-Discovery"),
-    ("vmware-auth", "관리", "VMware Authentication Daemon"),
+    ("msrpc", "RPC", "시스템", "Microsoft RPC"),
+    ("rpcbind", "RPC", "시스템", "ONC RPC portmapper"),
+    ("sunrpc", "RPC", "시스템", "ONC RPC"),
+    ("nfs-or-iis", "RPC", "시스템", "Microsoft RPC / NFS"),
+    ("ipmi", "관리", "관리", "IPMI BMC 관리"),
+    ("wsdapi", "관리", "시스템", "WS-Discovery"),
+    ("vmware-auth", "관리", "관리", "VMware Authentication Daemon"),
     # 산업 제어
-    ("modbus", "산업제어", "Modbus"),
-    ("enip", "산업제어", "EtherNet/IP"),
-    ("bacnet", "산업제어", "BACnet"),
-    ("s7", "산업제어", "Siemens S7"),
-    ("opcua", "산업제어", "OPC UA"),
+    ("modbus", "산업제어", "시스템", "Modbus"),
+    ("enip", "산업제어", "시스템", "EtherNet/IP"),
+    ("bacnet", "산업제어", "시스템", "BACnet"),
+    ("s7", "산업제어", "시스템", "Siemens S7"),
+    ("opcua", "산업제어", "시스템", "OPC UA"),
     # 진단 / 정보
-    ("chargen", "진단", "Character Generator (RFC 864)"),
-    ("echo", "진단", "Echo (RFC 862)"),
-    ("discard", "진단", "Discard (RFC 863)"),
-    ("finger", "정보조회", "Finger"),
+    ("chargen", "진단", "시스템", "Character Generator (RFC 864)"),
+    ("echo", "진단", "시스템", "Echo (RFC 862)"),
+    ("discard", "진단", "시스템", "Discard (RFC 863)"),
+    ("finger", "정보조회", "시스템", "Finger"),
     # 버전관리 / 분산
-    ("git", "버전관리", "Git"),
-    ("svn", "버전관리", "Subversion"),
-    ("zookeeper", "분산조정", "ZooKeeper"),
-    ("etcd", "분산조정", "etcd"),
+    ("git", "버전관리", "개발", "Git"),
+    ("svn", "버전관리", "개발", "Subversion"),
+    ("zookeeper", "분산조정", "내부통신", "ZooKeeper"),
+    ("etcd", "분산조정", "내부통신", "etcd"),
     # 컨테이너 / CI
-    ("docker", "컨테이너", "Docker API"),
-    ("kubernetes", "컨테이너", "Kubernetes API"),
-    ("jenkins", "CI/CD", "Jenkins"),
-    ("gitlab", "CI/CD", "GitLab"),
+    ("docker", "컨테이너", "관리", "Docker API"),
+    ("kubernetes", "컨테이너", "관리", "Kubernetes API"),
+    ("jenkins", "CI/CD", "개발", "Jenkins"),
+    ("gitlab", "CI/CD", "개발", "GitLab"),
     # 보안 도구
-    ("nessus", "보안도구", "Nessus"),
+    ("nessus", "보안도구", "보안", "Nessus"),
 ]
 
 
 def write_default_categories_xlsx(path):
-    """categories.xlsx 가 없을 때 기본값으로 새 파일 작성."""
-    rows = [["서비스명", "분류", "설명"]]
-    for name, cat, desc in DEFAULT_CATEGORIES:
-        rows.append([name, cat, desc])
-    xlsx_io.write_xlsx(path, rows, col_widths=[24, 18, 50])
+    """categories.xlsx 가 없을 때 기본값으로 새 파일 작성 (4컬럼)."""
+    rows = [["서비스명", "분류", "용도", "설명"]]
+    for tup in DEFAULT_CATEGORIES:
+        rows.append(list(tup))
+    xlsx_io.write_xlsx(path, rows, col_widths=[20, 14, 12, 50])
 
 
 def load_categories_xlsx(path):
     """
-    categories.xlsx 파싱.
-    리턴: ({서비스명_lower: (분류, 설명)}, errors)
+    categories.xlsx 파싱 (4컬럼 우선, 구버전 3컬럼도 호환).
+    리턴: ({서비스명_lower: {"category", "usage", "desc"}}, errors)
     """
     catmap = {}
     errors = []
@@ -198,7 +198,6 @@ def load_categories_xlsx(path):
         return {}, [f"categories.xlsx 읽기 실패: {e}"]
     if not all_rows:
         return {}, ["categories.xlsx 가 비어 있음."]
-    # 헤더 스킵
     for i, row in enumerate(all_rows[1:], start=2):
         if not row or all(not (c or "").strip() for c in row):
             continue
@@ -207,10 +206,23 @@ def load_categories_xlsx(path):
             continue
         name = (row[0] or "").strip().lower()
         cat = (row[1] or "").strip()
-        desc = (row[2] or "").strip() if len(row) >= 3 else ""
         if not name or not cat:
             continue
-        catmap[name] = (cat, desc)
+        # 4컬럼 schema 우선, 구버전 3컬럼 (서비스명/분류/설명) 호환
+        if len(row) >= 4:
+            usage = (row[2] or "").strip()
+            desc = (row[3] or "").strip()
+        elif len(row) == 3:
+            usage = ""
+            desc = (row[2] or "").strip()
+        else:
+            usage = ""
+            desc = ""
+        catmap[name] = {
+            "category": cat,
+            "usage": usage,
+            "desc": desc,
+        }
     return catmap, errors
 
 # (라벨, 옵션, 활성화, 그룹, 상세설명) — options.xlsx 가 없으면 이 셋으로 새로 만들어짐.
@@ -222,10 +234,10 @@ DEFAULT_OPTIONS = [
     ("DNS 역조회 안 함", "-n", "1", "",
      "PTR 역조회 시도하지 않음. 호스트가 많을수록 시간 단축 효과 큼. 결과에 호스트명이 안 들어가는 단점."),
 
-    # ---- TCP 스캔 타입 (라디오 - 항상 택 1)
-    ("SYN", "-sS", "0", "TCP 스캔 타입",
+    # ---- TCP 스캔 타입 (라디오 - 항상 택 1) — phase1 default = SYN
+    ("SYN", "-sS", "1", "TCP 스캔 타입",
      "Half-open TCP SYN 스캔 (-sS). raw socket 권한(=관리자) 필요. 타겟에 완전한 TCP 연결을 안 만들어 stealth, 빠름. 권한 없으면 nmap이 자동으로 -sT 로 폴백."),
-    ("Connect", "-sT", "1", "TCP 스캔 타입",
+    ("Connect", "-sT", "0", "TCP 스캔 타입",
      "정상 TCP 3-way handshake 완성 (-sT). 일반 사용자 권한으로 가능. 타겟 로그에 connect 흔적이 더 남고 -sS 보다 약간 느림."),
     ("Null", "-sN", "0", "TCP 스캔 타입",
      "TCP 헤더 모든 플래그를 0 으로 보냄 (-sN). RFC 따르는 호스트는 closed 포트에서 RST. 일부 stateless 방화벽 우회. Windows 는 응답 안 해 신뢰성 낮음."),
@@ -250,12 +262,12 @@ DEFAULT_OPTIONS = [
     ("T5", "-T5", "0", "속도",
      "Insane (-T5). 최고 속도. 패킷 손실/오탐 가능. 정확도보다 시간 절약이 우선일 때만."),
 
-    # ---- 비그룹 옵션
+    # ---- 비그룹 옵션 (phase1 default — 사용자 기준 명령에 맞춰 활성=1 일괄 셋)
     ("UDP 주요 포트 스캔",
-     "-sU -p U:7,53,67,68,69,123,135,137,138,139,161,162,500,514,520,1900,4500,5060,5353,11211", "0", "",
-     "UDP 스캔 + 자주 쓰이는 22 포트만. UDP 는 RST 응답이 없어 매우 느림. 포트를 좁힐수록 시간 단축. SNMP, NetBIOS, IKE, SIP 등 식별."),
-    ("TCP 모든 포트 (1-65535)", "-p T:1-65535", "0", "",
-     "TCP 65535 포트 전부 SYN 보냄. T4 기준 호스트당 5~15분. 전수 점검용. 시간 많이 걸려 일반 점검에선 자주 쓰는 포트만 권장."),
+     "-sU -p U:7,53,67,68,69,88,123,135,137,138,139,161,162,389,400,500,514,520,623,1900,2049,4500,5060,5353,5355,11211", "1", "",
+     "UDP 스캔 + 자주 쓰이는 26 포트 (DNS, NetBIOS, SNMP, Kerberos, IKE, SIP, NTP, NFS, mDNS 등). UDP 는 RST 응답 없어 느림. -p T:... 와 합쳐 단일 -p T:...,U:... 로 출력."),
+    ("TCP 모든 포트 (1-65535)", "-p T:1-65535", "1", "",
+     "TCP 65535 포트 전부 SYN 보냄. T4 기준 호스트당 5~15분. 전수 점검용 (phase1 기본)."),
     ("서비스 버전 식별", "-sV", "1", "",
      "open 포트마다 추가 probe 보내 서비스 이름/제품/버전 식별. -sV 안 쓰면 nmap-services 룩업만 — 부정확."),
     ("버전 식별 강도 최대", "--version-all", "1", "",
@@ -266,40 +278,40 @@ DEFAULT_OPTIONS = [
      "결과에 open 포트만. closed/filtered 출력 안 함. 결과 파일 작아지고 가독성 좋아짐."),
     ("이유 표기", "--reason", "1", "",
      "각 포트의 상태 판정 근거 표시 (syn-ack / no-response / reset 등). 디버깅과 결과 검증에 유용."),
-    ("RST 제한 우회", "--defeat-rst-ratelimit", "0", "",
+    ("RST 제한 우회", "--defeat-rst-ratelimit", "1", "",
      "Linux tcp_challenge_ack_limit 같은 RST throttle 우회. closed 포트가 timeout 으로 filtered 오인되는 것 방지. 정확도 보호."),
-    ("호스트그룹 64", "--min-hostgroup 64", "0", "",
-     "한 번에 64개 호스트를 병렬로 스캔. /24 같은 큰 대역 스캔 시 처리량 증가. 메모리/대역폭 더 사용."),
-    ("동시 처리 100", "--max-parallelism 100", "0", "",
-     "동시 in-flight probe 100개까지. 빠른 네트워크에서 처리량 증가. 너무 높으면 IDS 트리거/패킷 손실."),
+    ("호스트그룹 64", "--min-hostgroup 64", "1", "",
+     "한 번에 64개 호스트를 병렬로 스캔. /24 같은 큰 대역 스캔 시 처리량 증가."),
+    ("동시 처리 100", "--max-parallelism 100", "1", "",
+     "동시 in-flight probe 100개까지. 빠른 네트워크에서 처리량 증가."),
     ("Aggressive 모드 (-A)", "-A", "0", "",
-     "공격적 옵션 묶음 (-O OS 식별 + -sV + -sC default NSE + --traceroute). 매우 빠르게 정보 모음. 대신 흔적 많아 stealth 불가."),
+     "공격적 옵션 묶음 (-O OS 식별 + -sV + -sC default NSE + --traceroute). phase1 default 에는 미포함."),
     ("진행 stats 1분마다 출력 (--stats-every 1m)", "--stats-every 1m", "1", "",
      "1분마다 nmap 이 진행률 stats 라인을 stdout 에 강제로 씀. GUI 로그창이 buffer 때문에 한참 비어 보이는 문제 방지. 끄지 않는 것 권장."),
 
-    # ---- NSE (옵션이 --script 로 시작하면 NSE 패널로 자동 분류)
-    ("HTTP 식별", "--script http-headers,http-server-header,http-title", "0", "",
+    # ---- NSE (옵션이 --script 로 시작하면 NSE 패널로 자동 분류) — phase1 default 활성=1 셋
+    ("HTTP 식별", "--script http-headers,http-server-header,http-title", "1", "",
      "HTTP 응답 헤더, 서버 헤더, 페이지 타이틀 추출. 웹 서버 종류와 페이지 정보 빠르게 파악."),
-    ("TLS 인증서 식별 (CN/SAN/Issuer)", "--script ssl-cert", "0", "",
-     "TLS 인증서의 CN, SAN(Subject Alternative Name), Issuer, Validity 추출. 점검에서 가장 큰 정보 노출 NSE 중 하나 — 인증서가 내부 호스트명을 노출시킴."),
-    ("TLS cipher / ALPN 식별", "--script ssl-enum-ciphers,tls-alpn", "0", "",
+    ("TLS 인증서 식별 (CN/SAN/Issuer)", "--script ssl-cert", "1", "",
+     "TLS 인증서의 CN, SAN(Subject Alternative Name), Issuer, Validity 추출. 인증서가 내부 호스트명을 노출시키므로 점검 핵심."),
+    ("TLS cipher / ALPN 식별", "--script ssl-enum-ciphers,tls-alpn", "1", "",
      "지원 TLS 버전, cipher suite, ALPN 프로토콜 (h2/http/1.1). 약한 cipher 사용 여부 확인용."),
-    ("SSH 호스트키", "--script ssh-hostkey", "0", "",
+    ("SSH 호스트키", "--script ssh-hostkey", "1", "",
      "SSH 호스트 키 fingerprint (RSA/ECDSA/ED25519) 추출. 호스트 식별 + 키 재사용 탐지."),
-    ("SMB 식별", "--script nbstat,smb-os-discovery,smb-protocols,smb-security-mode", "0", "",
-     "Windows OS 버전, 도메인, NetBIOS 이름, SMB 버전, 보안 모드 (signing 강제 여부). AD 환경 점검 필수."),
-    ("DBMS 식별", "--script ms-sql-info,mysql-info,oracle-tns-version,mongodb-info,redis-info", "0", "",
-     "MS-SQL/MySQL/Oracle/MongoDB/Redis 버전과 일부 설정. 인증 안 된 DB 노출 여부도 식별."),
-    ("RDP/VNC/AJP 식별", "--script rdp-ntlm-info,rdp-enum-encryption,vnc-info,ajp-headers", "0", "",
-     "RDP NTLM 정보 (호스트명/도메인), RDP 암호화 모드, VNC 인증, AJP 헤더. 원격 접속 서비스 점검."),
-    ("UDP 응용 식별 (SNMP/IKE/SIP/NTP)", "--script snmp-info,ike-version,sip-methods,ntp-info", "0", "",
-     "SNMP community / OID 정보, IKE/IPSec 버전, SIP 지원 method, NTP 서버 정보. UDP 스캔과 함께 써야 의미."),
-    ("RPC 정보", "--script rpcinfo", "0", "",
+    ("SMB 식별", "--script nbstat,smb-os-discovery,smb-protocols", "1", "",
+     "Windows OS 버전, 도메인, NetBIOS 이름, SMB 버전. AD 환경 점검 필수. (phase1: smb-security-mode 제외)"),
+    ("DBMS 식별 (MS-SQL / Oracle)", "--script ms-sql-info,oracle-tns-version", "1", "",
+     "MS-SQL Server, Oracle TNS 버전 정보. (phase1: mysql/mongodb/redis 별도 NSE 미포함)"),
+    ("RDP 식별", "--script rdp-ntlm-info", "1", "",
+     "RDP NTLM 정보 (호스트명/도메인). (phase1: rdp-enum-encryption / vnc-info / ajp-headers 미포함)"),
+    ("UDP 응용 식별 (SNMP/IKE/SIP/NTP)", "--script snmp-info,ike-version,sip-methods,ntp-info", "1", "",
+     "SNMP community / OID, IKE/IPsec 버전, SIP 지원 method, NTP 서버 정보. UDP 스캔(-sU)과 함께 써야 의미."),
+    ("RPC 정보", "--script rpcinfo", "1", "",
      "Sun RPC (portmapper) 서비스 매핑. NFS, NIS 등 RPC 기반 서비스 식별."),
     ("LDAP/AD 식별", "--script ldap-rootdse", "0", "",
-     "LDAP root DSE 정보 추출. AD/LDAP 서버 도메인, naming context, 지원 컨트롤 등."),
-    ("raw 응답 캡처 (식별 실패 포트)", "--script fingerprint-strings,banner", "0", "",
-     "식별 실패한 포트의 원본 응답 바이트 캡쳐. unknown 서비스를 수동 분석할 때 필수. 결과 파일 커짐."),
+     "LDAP root DSE 정보 추출. AD/LDAP 서버 도메인, naming context. (phase1 default: 0)"),
+    ("raw 응답 캡처 (식별 실패 포트)", "--script fingerprint-strings", "1", "",
+     "식별 실패한 포트의 원본 응답 바이트 캡쳐 (fingerprint-strings). unknown 서비스 수동 분석 필수."),
 ]
 
 
@@ -1093,14 +1105,16 @@ class NmapParserApp:
         except OSError as e:
             messagebox.showerror("열기 실패", f"파일을 열 수 없음: {e}")
 
-    def _lookup_category(self, probed_name, guessed_name):
-        """확인서비스(short) 또는 추측서비스 이름으로 분류 lookup. 둘 다 실패면 '미분류'."""
+    def _lookup_full(self, probed_name, guessed_name):
+        """확인서비스(short) 또는 추측서비스 이름으로 lookup.
+        리턴: (분류, 용도). 못 찾으면 ('미분류', '')"""
         for n in (probed_name, guessed_name):
             if n:
                 key = n.rstrip("?").strip().lower()
                 if key and key in self.categories:
-                    return self.categories[key][0]
-        return "미분류"
+                    info = self.categories[key]
+                    return info.get("category", "미분류"), info.get("usage", "")
+        return "미분류", ""
 
     def _open_options_xlsx(self):
         if not os.path.isfile(self.options_xlsx_path):
@@ -1286,24 +1300,39 @@ class NmapParserApp:
         return extra_tokens, nse_scripts
 
     def apply_custom_ports(self, extra_tokens, user_port):
-        if not user_port:
-            return extra_tokens
+        """
+        다중 -p 통합 + 사용자 입력 포트 처리.
+        - 옵션 표 여러 행에 -p 가 있으면 콤마로 합쳐 단일 -p 로
+          (예: "TCP 모든 포트" -p T:1-65535 + "UDP 주요 포트" -sU -p U:7,53,...
+                → -p T:1-65535,U:7,53,...)
+        - 사용자 입력 포트 비어있지 않으면 옵션 표의 -p 들을 override
+        """
         cleaned = []
-        skip_next = False
-        for t in extra_tokens:
-            if skip_next:
-                skip_next = False
-                continue
-            if t == "-p":
-                skip_next = True
-                continue
-            if t.startswith("-p"):
-                continue
-            cleaned.append(t)
-        if re.match(r"^[\d,\- ]+$", user_port):
-            cleaned.extend(["-p", f"T:{user_port}"])
-        else:
-            cleaned.extend(["-p", user_port])
+        p_specs = []
+        i = 0
+        while i < len(extra_tokens):
+            t = extra_tokens[i]
+            if t == "-p" and i + 1 < len(extra_tokens):
+                p_specs.append(extra_tokens[i + 1])
+                i += 2
+            elif t.startswith("-p") and len(t) > 2 and t not in ("-pn", "-Pn"):
+                p_specs.append(t[2:])
+                i += 1
+            else:
+                cleaned.append(t)
+                i += 1
+
+        user_port = (user_port or "").strip()
+        if user_port:
+            if re.match(r"^[\d,\- ]+$", user_port):
+                p_specs = [f"T:{user_port}"]
+            else:
+                p_specs = [user_port]
+
+        if p_specs:
+            # T:... 가 먼저, U:... 가 나중 (사용자 기준 명령 관행)
+            p_specs.sort(key=lambda s: (0 if s.startswith("T:") else 1 if s.startswith("U:") else 2))
+            cleaned.extend(["-p", ",".join(p_specs)])
         return cleaned
 
     def sanitize_output_args(self, extra_tokens):
@@ -1718,23 +1747,25 @@ class NmapParserApp:
                     probed_short = ""
                     detail = ""
 
-                category = self._lookup_category(probed_short, guessed)
+                category, usage = self._lookup_full(probed_short, guessed)
 
                 scripts = port.findall("script")
                 if not scripts:
-                    rows.append([addr, portid, state, guessed, probed_short, category, detail, "", ""])
+                    rows.append([addr, portid, state, guessed, probed_short,
+                                 category, usage, detail, "", ""])
                 else:
                     for sc in scripts:
                         sid = sc.get("id", "") or ""
                         out = (sc.get("output", "") or "").replace("\r", " ").replace("\n", " | ")
-                        rows.append([addr, portid, state, guessed, probed_short, category, detail, sid, out])
+                        rows.append([addr, portid, state, guessed, probed_short,
+                                     category, usage, detail, sid, out])
 
         csv_path = (self.output_prefix or "") + ".csv"
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
             w.writerow(["IP", "PORT", "포트상태",
-                        "추측서비스", "확인서비스(short)", "분류", "상세(제품/버전)",
-                        "NSE스크립트명", "스크립트출력"])
+                        "추측서비스", "확인서비스(short)", "분류", "용도",
+                        "상세(제품/버전)", "NSE스크립트명", "스크립트출력"])
             for r in rows:
                 w.writerow(r)
         return csv_path
