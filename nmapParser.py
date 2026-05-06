@@ -25,10 +25,13 @@ import re
 import sys
 import csv
 import shlex
+import ipaddress
+import queue
 import subprocess
 import threading
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from dataclasses import dataclass, field
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
@@ -165,6 +168,11 @@ def load_options_xlsx(path):
     header = all_rows[0]
     if not header or len(header) < 3:
         return [], [f"options.xlsx 의 헤더가 잘못되었습니다 (3개 이상 컬럼 필요): {header}"]
+    normalized = [(c or "").strip() for c in header]
+    required = ["스캔 옵션", "옵션", "활성화"]
+    for idx, req in enumerate(required):
+        if len(normalized) <= idx or normalized[idx] != req:
+            return [], [f"options.xlsx 헤더 불일치: {idx+1}번째 컬럼은 '{req}' 이어야 합니다. (현재: '{normalized[idx] if len(normalized)>idx else ''}')"]
 
     for i, row in enumerate(all_rows[1:], start=2):
         if not row or all(not (c or "").strip() for c in row):
@@ -182,8 +190,14 @@ def load_options_xlsx(path):
         if not label:
             errors.append(f"{i}번째 행: '스캔 옵션' 라벨이 비어 있음 — {row}")
             continue
+        if len(label) > 120:
+            errors.append(f"{i}번째 행: '스캔 옵션' 라벨이 너무 깁니다 (최대 120자) — '{label[:40]}...'")
+            continue
         if not option:
             errors.append(f"{i}번째 행: '옵션' 컬럼이 비어 있음 — '{label}'")
+            continue
+        if len(option) > 512:
+            errors.append(f"{i}번째 행: '옵션' 값이 너무 깁니다 (최대 512자) — '{label}'")
             continue
         if enabled_raw not in ("0", "1"):
             errors.append(f"{i}번째 행: '활성화' 값이 0/1 이 아님 — '{enabled_raw}' (행: {row})")
@@ -309,6 +323,52 @@ def _quote_win(s):
     return '"' + s.replace('"', '\\"') + '"'
 
 
+@dataclass
+class ValidationIssue:
+    code: str
+    field: str
+    message: str
+    hint: str = ""
+
+
+@dataclass
+class ValidationResult:
+    valid_items: list = field(default_factory=list)
+    invalid_items: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+    issues: list = field(default_factory=list)
+
+    @property
+    def ok(self):
+        return not self.invalid_items and not self.issues
+
+
+def format_user_error(title, cause, action, details=None):
+    msg = f"원인: {cause}\n해결: {action}"
+    if details:
+        msg += f"\n상세:\n{details}"
+    return title, msg
+
+
+OPTION_CONFLICT_PREFIXES = [
+    ("-sS", "-sT"),
+    ("-sS", "-sN"),
+    ("-sS", "-sF"),
+    ("-sS", "-sX"),
+    ("-sS", "-sA"),
+    ("-sT", "-sN"),
+    ("-sT", "-sF"),
+    ("-sT", "-sX"),
+    ("-sT", "-sA"),
+    ("-sN", "-sF"),
+    ("-sN", "-sX"),
+    ("-sN", "-sA"),
+    ("-sF", "-sX"),
+    ("-sF", "-sA"),
+    ("-sX", "-sA"),
+]
+
+
 def _app_dir():
     """앱 베이스 폴더.
     - 일반 Python 실행 시: 이 .py 파일이 있는 폴더
@@ -432,6 +492,10 @@ class NmapParserApp:
         self._log_file_path = None    # 마지막 .log 경로 (스캔 끝나도 보존 — '전체 로그 보기' 용)
         self._log_lines_since_trim = 0
         self._log_max_lines = 275  # 화면에 표시할 최대 줄 수 (rolling buffer)
+        self._log_queue = queue.Queue()
+        self._log_pump_after_id = None
+        self._log_pump_interval_ms = 120
+        self._log_batch_limit = 120
 
         self._build_static_ui()
         self._reload_options(initial=True)
@@ -906,6 +970,52 @@ class NmapParserApp:
                     items.append(part)
         return items
 
+    def _is_valid_hostname(self, host):
+        if not host or len(host) > 253:
+            return False
+        labels = host.rstrip(".").split(".")
+        if not labels:
+            return False
+        label_re = re.compile(r"^[A-Za-z0-9-]{1,63}$")
+        for label in labels:
+            if not label or not label_re.match(label):
+                return False
+            if label[0] == "-" or label[-1] == "-":
+                return False
+        return True
+
+    def validate_targets(self, items):
+        result = ValidationResult()
+        seen = set()
+        for raw in items:
+            token = (raw or "").strip()
+            if not token:
+                continue
+            if token in seen:
+                result.warnings.append(f"중복 타깃 제거: {token}")
+                continue
+            seen.add(token)
+            try:
+                if "/" in token:
+                    ipaddress.ip_network(token, strict=False)
+                else:
+                    ipaddress.ip_address(token)
+                result.valid_items.append(token)
+                continue
+            except ValueError:
+                pass
+            if self._is_valid_hostname(token):
+                result.valid_items.append(token)
+            else:
+                result.invalid_items.append(token)
+                result.issues.append(ValidationIssue(
+                    code="INVALID_TARGET",
+                    field="targets",
+                    message=f"유효하지 않은 타깃 형식: {token}",
+                    hint="IP/CIDR/호스트명 형식을 확인하세요."
+                ))
+        return result
+
     def _gather_active_rows(self):
         """현재 체크된 체크박스 + 라디오 그룹의 선택된 행을 모아 리턴 (CSV 순서 유지)."""
         active = []
@@ -928,16 +1038,10 @@ class NmapParserApp:
                 # else: 이 행은 선택 안 됨 — 다음 행도 같은 그룹이면 이어서 매칭
         return active
 
-    # ----------------------------- 명령 조립
-    def _build_command(self, targets):
-        if not self.nmap_exe:
-            return None
-        cmd = [self.nmap_exe]
-
-        extra_tokens = []   # 비-NSE 옵션
-        nse_scripts = []    # --script 옵션에서 추출한 스크립트 이름들
-
-        for row in self._gather_active_rows():
+    def parse_option_rows_to_tokens(self, rows):
+        extra_tokens = []
+        nse_scripts = []
+        for row in rows:
             opt = row["option"]
             try:
                 tokens = shlex.split(opt)
@@ -949,8 +1053,6 @@ class NmapParserApp:
             if not tokens:
                 continue
             if tokens[0] == "--script":
-                # "--script a,b,c" 형태 (값이 두 번째 토큰)
-                # 사용자가 "--script=a,b,c" 로 적었을 수도 있어 별도 처리
                 if len(tokens) >= 2:
                     for s in tokens[1].split(","):
                         s = s.strip()
@@ -964,31 +1066,30 @@ class NmapParserApp:
                         nse_scripts.append(s)
             else:
                 extra_tokens.extend(tokens)
+        return extra_tokens, nse_scripts
 
-        # 사용자 입력 포트가 있으면 CSV 의 -p 를 덮어씀
-        user_port = self.custom_ports.get().strip()
-        if user_port:
-            cleaned = []
-            skip_next = False
-            for t in extra_tokens:
-                if skip_next:
-                    skip_next = False
-                    continue
-                if t == "-p":
-                    skip_next = True
-                    continue
-                if t.startswith("-p"):
-                    # -pT:1-65535 같은 붙여쓴 경우도 제거
-                    continue
-                cleaned.append(t)
-            extra_tokens = cleaned
-            # 숫자/콤마/하이픈만 들어오면 T:접두 자동 부착, 아니면 그대로
-            if re.match(r"^[\d,\- ]+$", user_port):
-                extra_tokens.extend(["-p", f"T:{user_port}"])
-            else:
-                extra_tokens.extend(["-p", user_port])
+    def apply_custom_ports(self, extra_tokens, user_port):
+        if not user_port:
+            return extra_tokens
+        cleaned = []
+        skip_next = False
+        for t in extra_tokens:
+            if skip_next:
+                skip_next = False
+                continue
+            if t == "-p":
+                skip_next = True
+                continue
+            if t.startswith("-p"):
+                continue
+            cleaned.append(t)
+        if re.match(r"^[\d,\- ]+$", user_port):
+            cleaned.extend(["-p", f"T:{user_port}"])
+        else:
+            cleaned.extend(["-p", user_port])
+        return cleaned
 
-        # CSV 의 -oA 가 있어도 무시 (출력 prefix 는 우리가 항상 관리)
+    def sanitize_output_args(self, extra_tokens):
         cleaned = []
         skip_next = False
         for t in extra_tokens:
@@ -999,25 +1100,66 @@ class NmapParserApp:
                 skip_next = True
                 continue
             cleaned.append(t)
-        extra_tokens = cleaned
+        return cleaned
 
-        cmd.extend(extra_tokens)
-
-        # 사용자 추가 NSE
-        custom_nse = self.custom_nse.get().strip()
+    def merge_nse_scripts(self, base_scripts, custom_nse_raw):
+        nse_scripts = list(base_scripts)
+        custom_nse = (custom_nse_raw or "").strip()
         if custom_nse:
             for s in custom_nse.split(","):
                 s = s.strip()
                 if s:
                     nse_scripts.append(s)
-        if nse_scripts:
-            seen = set()
-            uniq = []
-            for s in nse_scripts:
-                if s not in seen:
-                    seen.add(s)
-                    uniq.append(s)
-            cmd.extend(["--script", ",".join(uniq)])
+        seen = set()
+        uniq = []
+        for s in nse_scripts:
+            if s not in seen:
+                seen.add(s)
+                uniq.append(s)
+        return uniq
+
+    def validate_option_conflicts(self, extra_tokens):
+        result = ValidationResult(valid_items=list(extra_tokens))
+        token_set = set(extra_tokens)
+        for a, b in OPTION_CONFLICT_PREFIXES:
+            if a in token_set and b in token_set:
+                result.issues.append(ValidationIssue(
+                    code="OPTION_CONFLICT",
+                    field="options",
+                    message=f"충돌 옵션 동시 선택: {a} + {b}",
+                    hint="TCP 스캔 타입은 하나만 선택하세요."
+                ))
+        return result
+
+    def _show_validation_error(self, title, cause, action, invalid_items=None):
+        details = None
+        if invalid_items:
+            details = "\n".join(f"- {x}" for x in invalid_items[:10])
+        t, msg = format_user_error(title, cause, action, details=details)
+        messagebox.showerror(t, msg)
+
+    # ----------------------------- 명령 조립
+    def _build_command(self, targets):
+        if not self.nmap_exe:
+            return None
+        cmd = [self.nmap_exe]
+        active_rows = self._gather_active_rows()
+        extra_tokens, nse_scripts = self.parse_option_rows_to_tokens(active_rows)
+        conflicts = self.validate_option_conflicts(extra_tokens)
+        if conflicts.issues:
+            self._show_validation_error(
+                "옵션 충돌 오류",
+                "상호 배타 옵션이 동시에 선택되었습니다.",
+                "TCP 스캔 타입 옵션을 하나만 선택하세요.",
+                invalid_items=[i.message for i in conflicts.issues]
+            )
+            return None
+        extra_tokens = self.apply_custom_ports(extra_tokens, self.custom_ports.get().strip())
+        extra_tokens = self.sanitize_output_args(extra_tokens)
+        cmd.extend(extra_tokens)
+        merged_nse = self.merge_nse_scripts(nse_scripts, self.custom_nse.get())
+        if merged_nse:
+            cmd.extend(["--script", ",".join(merged_nse)])
 
         # 출력 prefix — 항상 -oA (CSV 변환에 XML 필요)
         try:
@@ -1044,10 +1186,20 @@ class NmapParserApp:
         return candidate
 
     def _preview_command(self):
-        targets = self._gather_targets()
-        if not targets:
+        gathered = self._gather_targets()
+        if not gathered:
             messagebox.showinfo("미리보기", "타겟이 비어 있습니다.")
             return
+        v = self.validate_targets(gathered)
+        if v.invalid_items:
+            self._show_validation_error(
+                "미리보기",
+                "타깃 형식 오류가 있습니다.",
+                "IP/CIDR/호스트명 형식으로 수정하세요.",
+                invalid_items=v.invalid_items
+            )
+            return
+        targets = v.valid_items
         if not self.nmap_exe:
             messagebox.showerror("미리보기", "nmap 경로가 잘못되었습니다.")
             return
@@ -1069,11 +1221,21 @@ class NmapParserApp:
 
     # ----------------------------- run / stop
     def _run_scan(self):
-        targets = self._gather_targets()
-        if not targets:
+        gathered = self._gather_targets()
+        if not gathered:
             messagebox.showerror("오류",
                 "타겟이 비어 있습니다.\n위쪽 텍스트박스에 IP/CIDR/호스트명을 입력하거나 '파일에서 불러오기' 사용.")
             return
+        v = self.validate_targets(gathered)
+        if v.invalid_items:
+            self._show_validation_error(
+                "오류",
+                "유효하지 않은 타깃이 포함되어 스캔을 시작할 수 없습니다.",
+                "IP/CIDR/호스트명 형식으로 수정 후 다시 시도하세요.",
+                invalid_items=v.invalid_items
+            )
+            return
+        targets = v.valid_items
         if not self.nmap_exe or not os.path.isfile(self.nmap_exe):
             messagebox.showerror("오류",
                 "nmap 경로가 잘못되었습니다.\n상단 빨간 버튼을 클릭해서 nmap.exe 경로를 직접 지정하세요.")
@@ -1090,6 +1252,11 @@ class NmapParserApp:
 
         self.log_text.delete("1.0", "end")
         self._log_lines_since_trim = 0
+        while True:
+            try:
+                self._log_queue.get_nowait()
+            except queue.Empty:
+                break
 
         # 전체 로그 파일 open (.log)
         self._log_file_path = (self.output_prefix or "scan") + ".log"
@@ -1114,6 +1281,7 @@ class NmapParserApp:
         self.run_button.config(state="disabled")
         self.stop_button.config(state="normal")
         self.status_var.set("스캔 진행 중...")
+        self._start_log_pump()
 
         self.scan_thread = threading.Thread(target=self._scan_worker, args=(cmd,), daemon=True)
         self.scan_thread.start()
@@ -1132,7 +1300,7 @@ class NmapParserApp:
                 kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
             self.proc = subprocess.Popen(cmd, **kwargs)
             for line in self.proc.stdout:
-                self.root.after(0, self._append_log, line)
+                self._log_queue.put(line)
             self.proc.wait()
             rc = self.proc.returncode
             self.root.after(0, self._scan_done, rc)
@@ -1171,6 +1339,51 @@ class NmapParserApp:
                     )
             except Exception:
                 pass
+
+    def _append_log_batch(self, lines):
+        if not lines:
+            return
+        merged = "".join(lines)
+        self.log_text.insert("end", merged)
+        self.log_text.see("end")
+        if self._log_file:
+            try:
+                self._log_file.write(merged)
+                self._log_file.flush()
+            except OSError:
+                pass
+        self._log_lines_since_trim += len(lines)
+        if self._log_lines_since_trim >= 25:
+            self._log_lines_since_trim = 0
+            try:
+                total = int(self.log_text.index("end-1c").split(".")[0])
+                if total > self._log_max_lines + 25:
+                    cut = total - self._log_max_lines
+                    self.log_text.delete("1.0", f"{cut}.0")
+                    self.log_text.insert(
+                        "1.0",
+                        f"... [상단 {cut - 1} 줄 잘림 — 전체 로그는 .log 파일 참조] ...\n"
+                    )
+            except Exception:
+                pass
+
+    def _start_log_pump(self):
+        if self._log_pump_after_id is not None:
+            return
+        self._log_pump_after_id = self.root.after(self._log_pump_interval_ms, self._pump_log_queue)
+
+    def _pump_log_queue(self):
+        self._log_pump_after_id = None
+        lines = []
+        for _ in range(self._log_batch_limit):
+            try:
+                lines.append(self._log_queue.get_nowait())
+            except queue.Empty:
+                break
+        if lines:
+            self._append_log_batch(lines)
+        if (self.proc and self.proc.poll() is None) or (not self._log_queue.empty()):
+            self._log_pump_after_id = self.root.after(self._log_pump_interval_ms, self._pump_log_queue)
 
     def _stop_scan(self):
         if self.proc and self.proc.poll() is None:
