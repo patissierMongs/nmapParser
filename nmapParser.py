@@ -349,8 +349,21 @@ def default_options_as_rows():
     return rows
 
 
+def _exposure_guide_for(key):
+    """SERVICE_EXPOSURE_GUIDE 항목을 4-tuple (위험도, 노출위험, 공격표면, 출처) 로 반환.
+    구 schema (2-tuple) 도 호환해 빠진 필드는 빈 문자열."""
+    e = SERVICE_EXPOSURE_GUIDE.get(key, ())
+    if len(e) == 4:
+        return e
+    if len(e) == 2:
+        # 구 schema: (노출위험, 공격표면) — 위험도/출처 비움
+        return ("", e[0], e[1], "")
+    return ("", "", "", "")
+
+
 def default_categories_as_map():
-    """DEFAULT_CATEGORIES 튜플 → load_categories_xlsx 가 반환하는 dict 와 같은 포맷."""
+    """DEFAULT_CATEGORIES 튜플 → load_categories_xlsx 가 반환하는 dict 와 같은 포맷.
+    리턴 dict 키: category, usage, desc, risk, exposure_risk, attack_surface, source."""
     catmap = {}
     for tup in DEFAULT_CATEGORIES:
         if len(tup) >= 4:
@@ -361,27 +374,44 @@ def default_categories_as_map():
             continue
         key = (name or "").strip().lower()
         if key:
-            risk, surface = SERVICE_EXPOSURE_GUIDE.get(key, ("", ""))
-            catmap[key] = {"category": category, "usage": usage, "desc": desc,
-                           "exposure_risk": risk, "attack_surface": surface}
+            risk, exposure, surface, source = _exposure_guide_for(key)
+            catmap[key] = {
+                "category": category, "usage": usage, "desc": desc,
+                "risk": risk,
+                "exposure_risk": exposure,
+                "attack_surface": surface,
+                "source": source,
+            }
     return catmap
 
 
 def write_default_categories_xlsx(path):
-    """categories.xlsx 가 없을 때 기본값으로 새 파일 작성 (6컬럼)."""
-    rows = [["서비스명", "분류", "용도", "설명", "노출위험", "공격표면"]]
+    """categories.xlsx 가 없을 때 기본값으로 새 파일 작성 (8컬럼).
+    schema: 서비스명 / 분류 / 용도 / 위험도 / 노출위험 / 공격표면 / 출처 / 설명
+    위험도 enum: 상 / 중 / 하 (KISA 한국식). 출처: KISA 항목 + CIS + MITRE."""
+    rows = [["서비스명", "분류", "용도", "위험도", "노출위험", "공격표면", "출처", "설명"]]
     for tup in DEFAULT_CATEGORIES:
         row = list(tup)
-        key = (row[0] or "").strip().lower() if row else ""
-        risk, surface = SERVICE_EXPOSURE_GUIDE.get(key, ("", ""))
-        rows.append(row + [risk, surface])
-    xlsx_io.write_xlsx(path, rows, col_widths=[20, 14, 12, 50, 34, 34])
+        # DEFAULT_CATEGORIES = (서비스명, 분류, 용도, 설명) — 4컬럼
+        if len(row) < 4:
+            row = row + [""] * (4 - len(row))
+        name, category, usage, desc = row[0], row[1], row[2], row[3]
+        key = (name or "").strip().lower()
+        risk, exposure, surface, source = _exposure_guide_for(key)
+        rows.append([name, category, usage, risk, exposure, surface, source, desc])
+    xlsx_io.write_xlsx(path, rows, col_widths=[20, 14, 12, 8, 38, 38, 36, 38])
 
 
 def load_categories_xlsx(path):
     """
-    categories.xlsx 파싱 (4컬럼 우선, 구버전 3컬럼도 호환).
-    리턴: ({서비스명_lower: {"category", "usage", "desc"}}, errors)
+    categories.xlsx 파싱.
+    schema 호환:
+      - 8컬럼 (현행): 서비스명 / 분류 / 용도 / 위험도 / 노출위험 / 공격표면 / 출처 / 설명
+      - 6컬럼 (직전):  서비스명 / 분류 / 용도 / 설명 / 노출위험 / 공격표면
+      - 4컬럼 (구버전): 서비스명 / 분류 / 용도 / 설명
+      - 3컬럼 (최초):  서비스명 / 분류 / 설명
+    누락된 필드는 SERVICE_EXPOSURE_GUIDE 코드 dict 에서 자동 보충.
+    리턴: ({서비스명_lower: {category, usage, desc, risk, exposure_risk, attack_surface, source}}, errors)
     """
     catmap = {}
     errors = []
@@ -391,6 +421,14 @@ def load_categories_xlsx(path):
         return {}, [f"categories.xlsx 읽기 실패: {e}"]
     if not all_rows:
         return {}, ["categories.xlsx 가 비어 있음."]
+
+    header = [(c or "").strip() for c in all_rows[0]] if all_rows else []
+    n_cols = len(header)
+    # 8컬럼 schema 인지 (위험도 컬럼이 4번째에 있는 경우) 헤더로 판별
+    is_8col = n_cols >= 8 and "위험도" in header
+    # 6컬럼 (직전): 4번째가 "설명"
+    is_6col_legacy = (n_cols >= 6) and (not is_8col) and ("설명" in header[:4])
+
     for i, row in enumerate(all_rows[1:], start=2):
         if not row or all(not (c or "").strip() for c in row):
             continue
@@ -401,27 +439,53 @@ def load_categories_xlsx(path):
         cat = (row[1] or "").strip()
         if not name or not cat:
             continue
-        # 4컬럼 schema 우선, 구버전 3컬럼 (서비스명/분류/설명) 호환
-        if len(row) >= 4:
+
+        # 기본값 (코드 dict 에서 보충)
+        guide_risk, guide_exposure, guide_surface, guide_source = _exposure_guide_for(name)
+
+        if is_8col:
+            usage = (row[2] or "").strip()
+            risk = (row[3] or "").strip() or guide_risk
+            exposure_risk = (row[4] or "").strip() or guide_exposure
+            attack_surface = (row[5] or "").strip() or guide_surface
+            source = (row[6] or "").strip() if len(row) > 6 else ""
+            if not source:
+                source = guide_source
+            desc = (row[7] or "").strip() if len(row) > 7 else ""
+        elif is_6col_legacy:
+            # 6컬럼 직전 schema: 서비스명 / 분류 / 용도 / 설명 / 노출위험 / 공격표면
             usage = (row[2] or "").strip()
             desc = (row[3] or "").strip()
+            exposure_risk = (row[4] or "").strip() or guide_exposure
+            attack_surface = (row[5] or "").strip() or guide_surface
+            risk = guide_risk
+            source = guide_source
+        elif len(row) >= 4:
+            # 4컬럼: 서비스명 / 분류 / 용도 / 설명
+            usage = (row[2] or "").strip()
+            desc = (row[3] or "").strip()
+            risk, exposure_risk, attack_surface, source = (
+                guide_risk, guide_exposure, guide_surface, guide_source)
         elif len(row) == 3:
+            # 3컬럼: 서비스명 / 분류 / 설명
             usage = ""
             desc = (row[2] or "").strip()
+            risk, exposure_risk, attack_surface, source = (
+                guide_risk, guide_exposure, guide_surface, guide_source)
         else:
             usage = ""
             desc = ""
-        if len(row) >= 6:
-            exposure_risk = (row[4] or "").strip()
-            attack_surface = (row[5] or "").strip()
-        else:
-            exposure_risk, attack_surface = SERVICE_EXPOSURE_GUIDE.get(name, ("", ""))
+            risk, exposure_risk, attack_surface, source = (
+                guide_risk, guide_exposure, guide_surface, guide_source)
+
         catmap[name] = {
             "category": cat,
             "usage": usage,
             "desc": desc,
+            "risk": risk,
             "exposure_risk": exposure_risk,
             "attack_surface": attack_surface,
+            "source": source,
         }
     return catmap, errors
 
@@ -1175,9 +1239,11 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
                     info = categories[key]
                     return (info.get("category", "미분류"),
                             info.get("usage", ""),
+                            info.get("risk", ""),
                             info.get("exposure_risk", ""),
-                            info.get("attack_surface", ""))
-        return "미분류", "", "", ""
+                            info.get("attack_surface", ""),
+                            info.get("source", ""))
+        return "미분류", "", "", "", "", ""
 
     root = parse_nmap_xml_resilient(xml_path)
     rows = []
@@ -1249,7 +1315,7 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
                 probed_short = ""
                 detail = ""
 
-            category, usage, exposure_risk, attack_surface = _lookup_full_local(probed_short, guessed)
+            category, usage, risk, exposure_risk, attack_surface, source = _lookup_full_local(probed_short, guessed)
             identification = compute_identification_status(svc_el)
             scripts = port.findall("script")
             nse_data = [(sc.get("id", "") or "", sc.get("output", "") or "") for sc in scripts]
@@ -1262,8 +1328,8 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
             output_joined = "\n".join(output_lines)
 
             rows.append([addr, hostname, os_str, portid, proto, state, guessed, probed_short,
-                         identification, category, usage, exposure_risk, attack_surface,
-                         detail, remarks, sids_joined, output_joined])
+                         identification, category, usage, risk, exposure_risk, attack_surface,
+                         source, detail, remarks, sids_joined, output_joined])
 
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
@@ -1271,7 +1337,7 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
             "IP", "호스트", "OS",
             "PORT", "프로토콜",
             "포트상태", "추측서비스", "확인서비스(short)",
-            "식별", "분류", "용도", "노출위험", "공격표면",
+            "식별", "분류", "용도", "위험도", "노출위험", "공격표면", "출처",
             "상세(제품/버전)", "비고",
             "NSE스크립트명", "스크립트출력",
         ])
@@ -2144,7 +2210,7 @@ class NmapParserApp:
 
     def _lookup_full(self, probed_name, guessed_name):
         """확인서비스(short) 또는 추측서비스 이름으로 lookup.
-        리턴: (분류, 용도, 노출위험, 공격표면). 못 찾으면 ('미분류', '', '', '')"""
+        리턴: (분류, 용도, 위험도, 노출위험, 공격표면, 출처). 못 찾으면 6개 빈 값."""
         for n in (probed_name, guessed_name):
             if n:
                 key = n.rstrip("?").strip().lower()
@@ -2152,9 +2218,11 @@ class NmapParserApp:
                     info = self.categories[key]
                     return (info.get("category", "미분류"),
                             info.get("usage", ""),
+                            info.get("risk", ""),
                             info.get("exposure_risk", ""),
-                            info.get("attack_surface", ""))
-        return "미분류", "", "", ""
+                            info.get("attack_surface", ""),
+                            info.get("source", ""))
+        return "미분류", "", "", "", "", ""
 
     def _open_options_folder(self):
         """options.xlsx 폴더 열기 — 메모리 모드 / UNC hang 대비 try/except."""
@@ -3411,7 +3479,7 @@ class NmapParserApp:
                     probed_short = ""
                     detail = ""
 
-                category, usage, exposure_risk, attack_surface = self._lookup_full(probed_short, guessed)
+                category, usage, risk, exposure_risk, attack_surface, source = self._lookup_full(probed_short, guessed)
 
                 # 식별 (4값) — service XML 노드 그대로 분석
                 identification = compute_identification_status(svc_el)
@@ -3433,7 +3501,8 @@ class NmapParserApp:
                     addr, hostname, os_str,                     # host-level (이슈 4)
                     portid, proto,                              # port-level (proto 이슈 4)
                     state, guessed, probed_short,
-                    identification, category, usage, exposure_risk, attack_surface,
+                    identification, category, usage,
+                    risk, exposure_risk, attack_surface, source,
                     detail, remarks,
                     sids_joined, output_joined,
                 ])
@@ -3445,7 +3514,8 @@ class NmapParserApp:
                 "IP", "호스트", "OS",
                 "PORT", "프로토콜",
                 "포트상태", "추측서비스", "확인서비스(short)",
-                "식별", "분류", "용도", "노출위험", "공격표면",
+                "식별", "분류", "용도",
+                "위험도", "노출위험", "공격표면", "출처",
                 "상세(제품/버전)", "비고",
                 "NSE스크립트명", "스크립트출력",
             ])
