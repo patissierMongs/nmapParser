@@ -183,62 +183,153 @@ DEFAULT_CATEGORIES = [
 ]
 
 # 서비스 노출 위험/공격 표면 가이드(최소 baseline) — categories.xlsx 의 5/6열 값이 비어있을 때 폴백.
+# SERVICE_EXPOSURE_GUIDE — 4-tuple (위험도, 노출위험, 공격표면, 출처)
+#   위험도: 상 / 중 / 하 (KISA 한국식 enum)
+#   출처: KISA 점검 항목 + CIS Controls v8 + MITRE ATT&CK Technique ID
+#   1순위: KISA "주요정보통신기반시설 취약점 분석·평가 상세 가이드" (U-01~U-72, W-01~W-72)
+#   2순위: CIS Critical Security Controls v8, MITRE ATT&CK
 SERVICE_EXPOSURE_GUIDE = {
-    "chargen": ("증폭/반사 DDoS 악용 가능", "UDP 반사/증폭"),
-    "ftp": ("평문 인증/익명 업로드/취약 구현", "무차별 대입, 디렉터리 열람, 업로드 악용"),
-    "ssh": ("약한 계정/구버전 취약점", "브루트포스, 취약 버전 RCE"),
-    "telnet": ("평문 계정 탈취", "도청, 세션 하이재킹"),
-    "smtp": ("오픈 릴레이/메일 위변조", "스팸 릴레이, 사용자 열거"),
-    "domain": ("내부 DNS 정보 노출", "zone transfer, 증폭"),
-    "dns": ("내부 DNS 정보 노출", "zone transfer, 증폭"),
-    "tftp": ("인증 없는 파일 읽기/쓰기", "설정파일 탈취/변조"),
-    "http": ("웹 취약점 직접 노출", "OWASP Top10, 관리자 페이지 노출"),
-    "https": ("웹 취약점 + TLS 설정 미흡", "웹 취약점, 약한 암호군/인증서 오남용"),
-    "rpcbind": ("내부 RPC 서비스 매핑 노출", "서비스 열거 후 측면이동"),
-    "ntp": ("증폭/시간 오염", "NTP 증폭, 시간 동기화 교란"),
-    "microsoft-ds": ("파일공유/인증 경계 노출", "SMB 취약점, null session, relay"),
-    "snmp": ("커뮤니티 문자열 기반 정보 유출", "장비 정보 수집/설정 조회"),
-    "irc": ("레거시 C2/봇넷 채널 악용 가능", "원격 제어 채널 악용"),
-    "cldap": ("디렉터리 정보 노출", "AD 정보 수집, 반사 트래픽 악용"),
-    "rlogin": ("신뢰관계/평문 인증 의존", "신뢰호스트 위조, 계정 탈취"),
-    "shell": ("원격 셸 직접 노출", "rsh 명령 실행 악용"),
-    "lpd": ("인증 없는 인쇄 큐 접근", "출력물 유출/서비스 거부"),
-    "ajp13": ("백엔드 웹 커넥터 직접 노출", "Ghostcat류 파일 읽기/요청 위조"),
-    "http-proxy": ("오픈 프록시 악용", "우회 접속, 익명 프록시 남용"),
-    "echo": ("반사 트래픽/진단용 오용", "반사/증폭 보조"),
-    "ipsec-nat-t": ("VPN 게이트웨이 표면 노출", "IKE 설정 약점 탐색"),
-    "syslog": ("로그 평문 유출/위조", "로그 인젝션/민감정보 유출"),
-    "sip": ("VoIP 인프라 악용", "통화 도청/요금 사기/사용자 열거"),
-    "rdp": ("원격 데스크톱 직접 노출", "브루트포스, 취약점 악용"),
-    "vnc": ("원격 화면 직접 노출", "약한 인증/세션 탈취"),
-    "vmrdp": ("가상화 관리 채널 노출", "관리 세션 탈취"),
-    "postgresql": ("DB 직접 노출", "계정 탈취/SQL 악용"),
-    "mysql": ("DB 직접 노출", "계정 탈취/SQL 악용"),
-    "postgres": ("DB 직접 노출", "계정 탈취/SQL 악용"),
-    "mariadb": ("DB 직접 노출", "계정 탈취/SQL 악용"),
-    "ms-sql-s": ("DB 직접 노출", "계정 탈취/SQL 악용"),
-    "oracle-tns": ("DB 직접 노출", "계정 탈취/SQL 악용"),
-    "mongodb": ("DB 직접 노출", "계정 탈취/NoSQL 악용"),
-    "redis": ("DB 직접 노출", "무인증 접근/데이터 변조"),
-    "db2": ("DB 직접 노출", "계정 탈취/SQL 악용"),
-    "ajp": ("백엔드 웹 커넥터 직접 노출", "파일 읽기/요청 위조"),
-    "https-alt": ("웹 취약점 + TLS 설정 미흡", "웹 취약점, 약한 암호군/인증서 오남용"),
-    "http-alt": ("웹 취약점 직접 노출", "OWASP Top10, 관리자 페이지 노출"),
-    "vnc-http": ("원격 화면 직접 노출", "약한 인증/세션 탈취"),
-    "msrpc": ("내부 원격 프로시저 표면 노출", "서비스 열거/취약점 악용"),
-    "netbios-ssn": ("파일공유/인증 경계 노출", "SMB/NetBIOS 취약점 악용"),
-    "snmptrap": ("모니터링 이벤트 평문 노출", "장비/이벤트 정보 수집"),
-    "isakmp": ("VPN 게이트웨이 표면 노출", "IKE 설정 약점 탐색"),
-    "webpush": ("웹 푸시 엔드포인트 노출", "푸시 채널 오남용/스팸"),
-    "ipcserver": ("내부 IPC 서비스 직접 노출", "권한상승/측면이동 발판"),
-    "cadlock2": ("제어/잠금 서비스 노출", "서비스 오동작 유도/중단"),
-    "914c-g": ("레거시/벤더 전용 서비스 노출", "취약 구현 탐색 및 악용"),
-    "cldap": ("디렉터리 정보 노출", "AD 정보 수집, 반사 트래픽 악용"),
-    "rsh": ("원격 셸 직접 노출", "신뢰관계 악용/명령 실행"),
-    "rcp": ("인증 취약 파일 전송", "파일 무단 전송/덮어쓰기"),
-    "rlogin": ("신뢰관계/평문 인증 의존", "신뢰호스트 위조, 계정 탈취"),
-    "ftp-proxy": ("오픈 프록시/중계 악용", "우회 접속, 익명 프록시 남용"),
-    "sip-tls": ("VoIP 제어 채널 노출", "사용자 열거/도청 시도"),
+    # ---- 원격 접속
+    "ssh":           ("중", "약한 비밀번호/구버전 시 무차별 대입·CVE 악용 가능", "브루트포스, OpenSSH CVE (CVE-2024-6387 등), 키 관리 미흡", "KISA U-01, CIS 4.6, MITRE T1021.004"),
+    "telnet":        ("상", "평문 통신으로 자격증명·세션 정보 그대로 노출", "패킷 스니핑, 중간자 공격, 자격증명 탈취", "KISA U-21, CIS 4.5, MITRE T1040"),
+    "rdp":           ("상", "NLA 미적용 시 NTLM 정보 노출, BlueKeep 류 RCE 위험", "NTLM relay, BlueKeep, 무차별 대입", "KISA W-20, CIS 4.6, MITRE T1021.001"),
+    "ms-wbt-server": ("상", "NLA 미적용 시 NTLM challenge 응답으로 호스트명/도메인 노출, BlueKeep 류 RCE 위험", "NTLM relay, BlueKeep, 무차별 대입", "KISA W-20, CIS 4.6, MITRE T1021.001"),
+    "vnc":           ("상", "평문 인증·약한 비밀번호 시 화면 탈취 / 세션 하이재킹", "약한 인증, 세션 탈취, RFB 취약점", "KISA W-20, CIS 4.6, MITRE T1021.005"),
+    "vnc-http":      ("상", "VNC over HTTP 평문 화면 탈취 / 약한 인증", "약한 인증, 세션 탈취", "KISA W-20, MITRE T1021.005"),
+    "vmrdp":         ("상", "가상화 관리 채널 노출 시 hypervisor 권한 탈취 가능", "관리 세션 탈취, hypervisor escape", "KISA W-65, MITRE T1021.001"),
+    "xrdp":          ("상", "Linux RDP 약한 인증 / NLA 미지원 구버전", "무차별 대입, 인증 우회", "KISA W-20, MITRE T1021.001"),
+    "rlogin":        ("상", "신뢰관계 평문 인증 — .rhosts 위조 시 무인증 접근", "신뢰호스트 위조, 계정 탈취", "KISA U-23, CIS 4.5, MITRE T1021"),
+    "rsh":           ("상", "rsh 평문 명령 실행 — 신뢰관계 악용 시 무인증 RCE", "신뢰관계 악용, 명령 실행", "KISA U-23, CIS 4.5, MITRE T1021"),
+    "shell":         ("상", "rsh 셸 직접 노출 — 무인증 명령 실행 가능", "rsh 명령 실행 악용", "KISA U-23, MITRE T1021"),
+    "rexec":         ("상", "원격 명령 실행 평문 인증", "자격증명 탈취, 명령 실행", "KISA U-23, MITRE T1021"),
+    # ---- 웹 / 프록시
+    "http":          ("중", "평문 통신, 응용 의존 취약점 (XSS/SQLi 등), 헤더 정보 노출", "OWASP Top10, Banner 정보 노출, 관리자 페이지", "KISA W-13, OWASP Top10, MITRE T1190"),
+    "http-alt":      ("중", "평문 HTTP 대체 포트 — 동일 취약점 면적", "OWASP Top10, Banner 정보 노출", "KISA W-13, OWASP Top10, MITRE T1190"),
+    "https":         ("하", "TLS 설정 미흡 시 약한 cipher / TLS 1.0~1.1 / 자체서명 인증서 신뢰 문제", "TLS 다운그레이드, 약한 cipher, 인증서 오남용", "KISA U-66, NIST SP 800-52, MITRE T1573"),
+    "https-alt":     ("하", "TLS 설정 미흡 시 약한 cipher / TLS 1.0~1.1", "TLS 다운그레이드, 약한 cipher", "KISA U-66, NIST SP 800-52"),
+    "ssl/http":      ("하", "TLS over HTTP — 약한 cipher / 구버전 TLS 시 다운그레이드", "TLS 다운그레이드, 약한 cipher", "KISA U-66, NIST SP 800-52"),
+    "ssl/https":     ("하", "TLS over HTTPS — 약한 cipher / 구버전 TLS", "TLS 다운그레이드, 약한 cipher", "KISA U-66, NIST SP 800-52"),
+    "ajp13":         ("상", "AJP 외부 노출 시 Ghostcat (CVE-2020-1938) 으로 임의 파일 읽기", "Ghostcat (CVE-2020-1938), 파일 읽기, 요청 위조", "KISA W-13, CIS 4.8, MITRE T1190"),
+    "ajp":           ("상", "AJP 외부 노출 시 임의 파일 읽기 / 요청 위조", "Ghostcat 류, 파일 읽기, 요청 위조", "KISA W-13, MITRE T1190"),
+    "http-proxy":    ("상", "오픈 프록시 시 우회 접속 / 익명 트래픽 발판", "우회 접속, 익명 프록시 남용, SSRF", "KISA W-13, MITRE T1090"),
+    "ftp-proxy":     ("상", "오픈 FTP 프록시 시 우회 접속 / 중계 악용", "우회 접속, 익명 프록시 남용", "KISA W-13, MITRE T1090"),
+    "socks":         ("상", "오픈 SOCKS 프록시 시 우회 접속 / 익명 트래픽 발판", "우회 접속, 익명 프록시 남용", "KISA W-13, MITRE T1090"),
+    "webpush":       ("중", "웹 푸시 엔드포인트 노출 시 인증 미흡 채널 오남용", "푸시 채널 오남용, 스팸 발송", "OWASP API, MITRE T1190"),
+    # ---- 인쇄
+    "ipp":           ("중", "외부 노출 시 익명 인쇄 큐 접근, CUPS CVE 악용", "출력물 유출, CUPS RCE (CVE-2024-47176 류)", "KISA U-23, MITRE T1133"),
+    "printer":       ("중", "LPD 인쇄 평문, 인증 약함", "출력물 유출, 서비스 거부", "KISA U-23, CIS 4.8"),
+    "lpd":           ("중", "LPD 인증 없는 인쇄 큐 접근", "출력물 유출, 서비스 거부", "KISA U-23, CIS 4.8"),
+    # ---- DBMS (모두 외부 노출 차단 원칙)
+    "mysql":         ("상", "외부 노출 시 무차별 대입, 버전·plugin 정보 노출, SQL 권한 탈취", "무차별 대입, SQL injection, 알려진 CVE", "KISA U-46, CIS 4.6, MITRE T1190"),
+    "mariadb":       ("상", "외부 노출 시 무차별 대입, 버전 정보 노출", "무차별 대입, 알려진 CVE", "KISA U-46, CIS 4.6, MITRE T1190"),
+    "postgresql":    ("상", "외부 노출 시 무차별 대입, scram-sha-256 미적용 시 약한 해시", "무차별 대입, 권한 탈취, CVE 악용", "KISA U-46, CIS 4.6, MITRE T1190"),
+    "postgres":      ("상", "외부 노출 시 무차별 대입, 권한 탈취 가능", "무차별 대입, 권한 탈취", "KISA U-46, CIS 4.6, MITRE T1190"),
+    "ms-sql-s":      ("상", "외부 노출 시 sa 무차별 대입, xp_cmdshell 활용 시 OS 명령 실행", "sa 무차별 대입, xp_cmdshell, 권한 상승", "KISA U-46, CIS 4.6, MITRE T1190"),
+    "ms-sql-m":      ("중", "MS-SQL Browser 서비스 — 인스턴스 정보 노출", "정보 수집 (instance 이름·포트)", "KISA U-46"),
+    "oracle-tns":    ("상", "외부 노출 시 TNS poisoning, SID 무차별 대입, listener 정보 노출", "TNS poisoning, SID 무차별 대입", "KISA U-46, CIS 4.6, MITRE T1190"),
+    "mongodb":       ("상", "기본 인증 없음 / bind 0.0.0.0 시 무인증 데이터 노출·변조", "무인증 접근, 데이터 변조, 랜섬웨어", "KISA U-46, CIS 4.6, MITRE T1190"),
+    "mongo":         ("상", "기본 인증 없음 시 무인증 데이터 접근", "무인증 접근, 데이터 변조", "KISA U-46, CIS 4.6, MITRE T1190"),
+    "redis":         ("상", "기본 requirepass 미설정 시 무인증 / SLAVEOF·CONFIG 활용 RCE", "무인증 접근, RCE (slaveof+config), 데이터 변조", "KISA U-46, CIS 4.6, MITRE T1190"),
+    "elasticsearch": ("상", "X-Pack 인증 미적용 시 무인증 데이터 / 인덱스 노출", "무인증 접근, 데이터 유출, CVE 악용", "KISA U-46, CIS 4.6"),
+    "couchdb":       ("상", "Admin Party (인증 미설정) 시 무인증 관리자 권한", "무인증 관리자, CVE-2017-12635 권한 상승", "KISA U-46, MITRE T1190"),
+    "neo4j":         ("상", "기본 neo4j/neo4j 비밀번호 / 외부 노출 시 그래프 데이터 탈취", "기본 비밀번호, 무차별 대입", "KISA U-46, CIS 4.6"),
+    "influxdb":      ("상", "인증 미설정 시 시계열 데이터 무인증 열람·변조", "무인증 접근, 데이터 변조", "KISA U-46, CIS 4.6"),
+    "memcache":      ("상", "기본 인증 없음 / UDP amplification (1000x+)", "무인증 데이터, UDP 증폭 DDoS", "KISA U-46, CIS 4.8, US-CERT TA18-039A"),
+    "memcached":     ("상", "기본 인증 없음 / UDP amplification", "무인증 데이터, UDP 증폭 DDoS", "KISA U-46, CIS 4.8, US-CERT TA18-039A"),
+    "cassandra":     ("상", "기본 cassandra/cassandra / 외부 노출 시 데이터 탈취", "기본 비밀번호, 무차별 대입", "KISA U-46, CIS 4.6"),
+    "hbase":         ("상", "Kerberos 미적용 시 무인증 / 외부 노출 시 데이터 탈취", "무인증, 데이터 변조", "KISA U-46, CIS 4.6"),
+    "db2":           ("상", "외부 노출 시 무차별 대입, SQL 권한 탈취", "무차별 대입, 권한 탈취", "KISA U-46, CIS 4.6"),
+    # ---- 메시지큐
+    "amqp":          ("중", "기본 guest:guest 시 메시지 무인증 접근, TLS 미적용", "기본 자격증명, 메시지 변조", "CIS 4.6, MITRE T1133"),
+    "mqtt":          ("중", "TLS·인증 미적용 시 IoT 메시지 노출·변조", "메시지 도청, 명령 위조", "CIS 4.6, MITRE T1557"),
+    "nats":          ("중", "토큰/TLS 미적용 시 메시지 노출", "메시지 도청, 변조", "CIS 4.6"),
+    "kafka":         ("중", "SASL/TLS 미적용 시 토픽 데이터 무인증 접근", "토픽 데이터 노출, 변조", "CIS 4.6, MITRE T1133"),
+    # ---- 메일
+    "smtp":          ("상", "open relay 시 스팸 릴레이 / SPF·DKIM 미적용 시 위변조", "스팸 릴레이, 사용자 열거, 위변조", "KISA W-22, CIS 9.4, MITRE T1071.003"),
+    "submission":    ("중", "TLS 미적용 시 메일 자격증명 노출", "자격증명 탈취, 도청", "KISA W-22, NIST SP 800-177"),
+    "smtps":         ("하", "TLS 1.2+ 미적용 시 약한 cipher", "TLS 다운그레이드, 약한 cipher", "KISA U-66, NIST SP 800-52"),
+    "pop3":          ("상", "평문 인증으로 메일 자격증명·메일 내용 노출", "자격증명 탈취, 메일 도청", "KISA U-21, MITRE T1040"),
+    "pop3s":         ("하", "TLS 1.2+ 미적용 시 약한 cipher", "TLS 다운그레이드", "KISA U-66, NIST SP 800-52"),
+    "imap":          ("상", "평문 인증으로 메일 자격증명·메일 내용 노출", "자격증명 탈취, 메일 도청", "KISA U-21, MITRE T1040"),
+    "imaps":         ("하", "TLS 1.2+ 미적용 시 약한 cipher", "TLS 다운그레이드", "KISA U-66, NIST SP 800-52"),
+    # ---- 디렉토리 / 인증
+    "ldap":          ("상", "익명 바인드 시 디렉토리 정보 / DN 트리 / 사용자명 무인증 열람", "익명 바인드, 무차별 대입, 정보 수집", "KISA W-44, CIS 4.10, MITRE T1087.002"),
+    "ldaps":         ("중", "TLS 적용되어 도청은 차단되지만 익명 바인드 / 무차별 대입은 가능", "익명 바인드, 무차별 대입", "KISA W-44, CIS 4.10, MITRE T1087.002"),
+    "cldap":         ("중", "Connectionless LDAP — UDP amplification 도구 / AD 정보 수집", "AD 정보 수집, UDP 증폭 DDoS (56x)", "KISA W-44, US-CERT TA14-017A, MITRE T1087.002"),
+    "kerberos-sec":  ("상", "Kerberoasting / AS-REP roasting 으로 service account 해시 추출", "Kerberoasting (T1558.003), AS-REP roasting", "KISA W-44, CIS 16.5, MITRE T1558"),
+    "kpasswd":       ("중", "약한 암호 정책 시 무차별 대입", "무차별 대입, 약한 암호", "KISA W-44"),
+    # ---- DNS
+    "domain":        ("중", "재귀 쿼리 외부 허용 시 DNS 증폭, zone transfer 시 내부 호스트명 노출", "DNS 증폭 (54x), zone transfer (AXFR)", "KISA U-15, CIS 4.10, MITRE T1018"),
+    "dns":           ("중", "재귀 쿼리 외부 허용 시 DNS 증폭, zone transfer 시 내부 정보 노출", "DNS 증폭, zone transfer", "KISA U-15, CIS 4.10, MITRE T1018"),
+    # ---- 파일 공유 / 전송
+    "microsoft-ds":  ("상", "SMB1 활성 시 EternalBlue, NTLM relay, 익명 nullsession 가능", "EternalBlue (MS17-010), NTLM relay, 익명 SMB", "KISA W-08, CIS 9.4, MITRE T1021.002"),
+    "netbios-ssn":   ("상", "NetBIOS Session 외부 노출 시 SMB 취약점 / nullsession", "SMB 취약점, null session, NetBIOS 정보 수집", "KISA W-08, CIS 9.4, MITRE T1021.002"),
+    "netbios-ns":    ("상", "NetBIOS Name Service 외부 노출 시 NetBIOS poisoning", "NetBIOS poisoning, LLMNR 탈취", "KISA W-08, CIS 9.4, MITRE T1557.001"),
+    "nbstat":        ("상", "NetBIOS Status — 외부 노출 시 호스트명·도메인 정보 노출", "정보 수집 (호스트명·MAC·사용자)", "KISA W-08, MITRE T1018"),
+    "nfs":           ("상", "no_root_squash 시 root 권한 파일 변조 / 익명 mount", "익명 mount, root_squash 우회, 파일 변조", "KISA U-23, CIS 4.6, MITRE T1021"),
+    "ftp":           ("상", "평문 인증, 익명 로그인 가능 시 무인증 파일 접근, FTP bounce", "자격증명 탈취, 익명 접근, FTP bounce, 디렉터리 트래버설", "KISA U-21, CIS 4.5, MITRE T1567"),
+    "ftps":          ("하", "TLS 적용되어 도청 차단되지만 약한 cipher 시 다운그레이드", "TLS 다운그레이드, 약한 cipher", "KISA U-66, NIST SP 800-52"),
+    "tftp":          ("상", "인증 없는 파일 read/write — 설정파일 탈취·변조", "설정파일 탈취, 부팅 이미지 변조", "KISA U-23, CIS 4.5, MITRE T1567"),
+    "sftp":          ("하", "SSH 채널 — 키 인증 시 안전. 약한 비밀번호 시 위험", "SSH 무차별 대입", "KISA U-01, CIS 4.6"),
+    "rcp":           ("상", "rsh 기반 평문 파일 전송 — 인증 취약", "파일 무단 전송, 덮어쓰기", "KISA U-23, MITRE T1021"),
+    # ---- 시간 / 모니터링 / 로그
+    "ntp":           ("중", "monlist 활성 시 UDP amplification (556x), 시간 동기화 교란", "NTP amplification (CVE-2013-5211), 시간 변조", "KISA U-30, US-CERT TA14-013A, MITRE T1498.002"),
+    "snmp":          ("상", "community 'public' 기본값 시 시스템 정보 무인증 열람·설정", "정보 수집, 설정 조회·변경, SNMPv1/v2c 약점", "KISA U-30, CIS 4.8, MITRE T1018"),
+    "snmptrap":      ("중", "외부 노출 시 모니터링 이벤트 평문 노출", "장비/이벤트 정보 수집", "KISA U-30, CIS 4.8"),
+    "zabbix-agent":  ("중", "Server 화이트리스트 미적용 시 무인증 명령 실행 (UserParameter)", "무인증 명령 실행, 정보 수집", "KISA U-30, CIS 4.6"),
+    "zabbix-trapper":("중", "외부 노출 시 모니터링 데이터 변조", "데이터 위조, 모니터링 우회", "CIS 4.6"),
+    "prometheus":    ("중", "외부 노출 시 메트릭 무인증 열람 / 내부 정보 수집", "메트릭 노출, 정보 수집", "CIS 4.6, MITRE T1018"),
+    "grafana":       ("중", "기본 admin/admin 시 대시보드·DB 자격증명 탈취", "기본 비밀번호, CVE 악용", "CIS 4.6, MITRE T1190"),
+    "syslog":        ("중", "TLS 미적용 시 로그 평문 / 로그 인젝션", "로그 인젝션, 민감정보 유출", "KISA U-43, CIS 8.2"),
+    "splunk":        ("중", "외부 노출 시 무차별 대입, 알려진 CVE", "무차별 대입, CVE 악용", "CIS 4.6, MITRE T1190"),
+    # ---- VPN / VoIP / 미디어
+    "isakmp":        ("중", "PSK 사용 시 weak PSK 무차별 대입, IKEv1 약점", "PSK 무차별 대입, IKEv1 aggressive mode", "KISA U-66, MITRE T1133"),
+    "ipsec-nat-t":   ("중", "PSK 사용 시 weak PSK 무차별 대입", "PSK 무차별 대입", "KISA U-66, MITRE T1133"),
+    "openvpn":       ("중", "약한 cipher / 인증서 검증 미흡 시 MITM", "MITM, 약한 cipher", "KISA U-66, NIST SP 800-52"),
+    "sip":           ("상", "VoIP 인프라 — TLS 미적용 시 통화 도청 / 사용자 열거 / 요금 사기", "통화 도청, 사용자 열거, toll fraud", "KISA U-66, MITRE T1071"),
+    "sip-tls":       ("중", "TLS 적용되지만 사용자 열거·요금 사기는 가능", "사용자 열거, toll fraud", "KISA U-66"),
+    "rtsp":          ("중", "인증 미적용 시 미디어 스트림 무인증 접근", "스트림 도청, 인증 우회", "MITRE T1133"),
+    # ---- 네트워크 검색
+    "ssdp":          ("중", "UPnP/SSDP — UDP amplification (30x) / 내부 장비 정보 노출", "UDP 증폭, 장비 정보 수집", "KISA U-30, US-CERT TA14-017A, MITRE T1498.002"),
+    "upnp":          ("중", "UPnP — 외부 노출 시 포트 매핑 무인증 추가", "포트 매핑 무인증, 정보 수집", "KISA U-30, MITRE T1133"),
+    "mdns":          ("중", "Multicast DNS — 외부 노출 시 내부 호스트명 노출", "정보 수집, mDNS poisoning", "KISA U-15, MITRE T1557.001"),
+    # ---- RPC / 관리
+    "msrpc":         ("상", "Microsoft RPC 외부 노출 시 endpoint mapper 정보 / RPC CVE 악용", "endpoint mapper 정보 수집, RPC CVE", "KISA W-08, CIS 4.8, MITRE T1021.003"),
+    "rpcbind":       ("상", "ONC RPC portmapper 외부 노출 시 RPC 서비스 매핑 / 측면이동 발판", "서비스 열거, NFS 정보 수집", "KISA U-23, CIS 4.8, MITRE T1018"),
+    "sunrpc":        ("상", "ONC RPC 외부 노출 시 RPC 서비스 매핑", "서비스 열거, 측면이동", "KISA U-23, CIS 4.8, MITRE T1018"),
+    "nfs-or-iis":    ("상", "포트 135 — Microsoft RPC / NFS 모호. RPC 정보 수집 가능", "RPC 정보 수집, 서비스 열거", "KISA W-08, MITRE T1018"),
+    "ipmi":          ("상", "RAKP 인증 우회로 무인증 자격 해시 추출 / cipher 0 활성 시 무인증", "RAKP CVE-2013-4786, cipher 0, 펌웨어 탈취", "KISA W-65, US-CERT 2013-08, MITRE T1133"),
+    "wsdapi":        ("중", "WS-Discovery 외부 노출 시 UDP amplification (153x) / 장비 정보 수집", "UDP 증폭 DDoS, 정보 수집", "KISA W-08, US-CERT 2019-08, MITRE T1498.002"),
+    "vmware-auth":   ("중", "VMware Authentication Daemon 외부 노출 시 정보 수집·무차별 대입", "무차별 대입, 정보 수집", "KISA W-65, MITRE T1021"),
+    "ipcserver":     ("상", "내부 IPC 서비스 직접 노출 시 권한상승 / 측면이동 발판", "권한 상승, 측면 이동", "KISA W-65, MITRE T1021"),
+    # ---- 산업 제어 (외부 노출 절대 금지)
+    "modbus":        ("상", "외부 노출 시 PLC 직접 제어 — 인증 없는 산업 제어 프로토콜", "PLC 직접 제어, 명령 위조, 모니터링", "KISA W-65, ICS-CERT, MITRE T0846"),
+    "enip":          ("상", "외부 노출 시 EtherNet/IP 직접 제어 / 펌웨어 탈취", "PLC 제어, 펌웨어 탈취", "KISA W-65, ICS-CERT, MITRE T0846"),
+    "bacnet":        ("상", "외부 노출 시 빌딩 자동화 시스템 직접 제어", "빌딩 시스템 제어, 모니터링", "KISA W-65, ICS-CERT"),
+    "s7":            ("상", "외부 노출 시 Siemens S7 PLC 직접 제어 — Stuxnet 류 위협", "PLC 제어, 펌웨어 변조 (Stuxnet)", "KISA W-65, ICS-CERT, MITRE T0846"),
+    "opcua":         ("상", "TLS+인증 미적용 시 OPC UA 데이터 변조 / 명령 위조", "데이터 변조, 명령 위조", "KISA W-65, ICS-CERT"),
+    "cadlock2":      ("상", "제어/잠금 서비스 외부 노출 시 서비스 중단 유도", "서비스 중단, 오동작 유도", "KISA W-65"),
+    # ---- 진단 / 정보 (RFC 진단용 — 사용 안 함 권장)
+    "chargen":       ("상", "UDP amplification 도구로 악용 (200x+)", "DDoS 증폭, 정보 가치 0", "KISA W-15, US-CERT VU#222929, MITRE T1498.002"),
+    "echo":          ("중", "UDP echo 반사 트래픽 / 진단용 오용", "반사 트래픽, 증폭 보조", "KISA W-15, CIS 4.8"),
+    "discard":       ("하", "discard 진단 — 데이터 가치 없으나 비활성 권장", "진단 채널", "KISA W-15, CIS 4.8"),
+    "finger":        ("중", "Finger — 사용자 정보 (로그인 사용자, 홈디렉토리) 노출", "사용자 정보 수집, 권한 상승 발판", "KISA U-21, CIS 4.8, MITRE T1087.001"),
+    "irc":           ("중", "레거시 IRC 채널 — C2/봇넷 채널로 악용 가능", "C2 채널 악용, 봇넷", "MITRE T1071.001"),
+    "ftp-data":      ("중", "FTP 데이터 채널 — 평문 전송", "도청, MITM", "KISA U-21, MITRE T1040"),
+    # ---- 버전관리 / 분산
+    "git":           ("중", "익명 접근 시 소스 코드 유출 / .git 디렉토리 노출", "소스 코드 유출, 자격증명 노출", "OWASP, MITRE T1213"),
+    "svn":           ("중", "익명 접근 시 소스 코드 유출", "소스 코드 유출", "OWASP, MITRE T1213"),
+    "zookeeper":     ("중", "SASL 미적용 시 분산 조정 데이터 무인증 접근", "무인증 접근, ACL 우회", "CIS 4.6"),
+    "etcd":          ("상", "TLS·클라이언트 인증 미적용 시 클러스터 비밀(secrets) 무인증 노출", "secrets 노출, 클러스터 제어", "CIS 4.6, MITRE T1552"),
+    # ---- 컨테이너 / CI
+    "docker":        ("상", "Docker API TLS·인증 미적용 시 무인증 컨테이너 생성·호스트 RCE", "컨테이너 escape, host RCE, secrets 탈취", "CIS Docker, MITRE T1610"),
+    "kubernetes":    ("상", "RBAC·TLS 미적용 시 클러스터 무인증 제어", "클러스터 제어, secrets 탈취, RCE", "CIS Kubernetes, MITRE T1552"),
+    "jenkins":       ("상", "외부 노출 시 인증 우회·플러그인 RCE", "인증 우회, 플러그인 RCE, 자격증명 탈취", "CIS 4.6, MITRE T1190"),
+    "gitlab":        ("중", "TLS·인증 적용 시 안전. CVE 패치 미적용 시 RCE", "CVE 악용 (GitLab RCE 시리즈)", "CIS 4.6, MITRE T1190"),
+    # ---- 보안 도구
+    "nessus":        ("중", "외부 노출 시 보안 도구 자체가 표적 — 자격증명·정책 탈취", "도구 자격증명 탈취", "CIS 4.6"),
+    # ---- 기타 / 레거시
+    "914c-g":        ("중", "레거시/벤더 전용 서비스 — 취약 구현 탐색", "취약 구현 탐색", "정보 부족"),
 }
 
 
@@ -2793,10 +2884,23 @@ class NmapParserApp:
             kwargs = dict(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                bufsize=0,  # binary 모드 + 직접 chunk decode → 즉시 flush
+                # bufsize=-1 (OS 기본 버퍼링) — binary 모드. read1 메서드 항상 존재.
+                bufsize=-1,
+                # PyInstaller --windowed 환경에서 부모 프로세스의 stdin/stdout 핸들이
+                # None 또는 NUL 일 수 있어, 자식이 부모 stdin 을 잘못 상속받지 않게 명시 차단.
+                stdin=subprocess.DEVNULL,
             )
             if sys.platform == "win32":
+                # CREATE_NO_WINDOW + STARTUPINFO 둘 다 명시. 일부 Windows 버전에서
+                # creationflags 만으로는 콘솔 창이 깜빡 뜰 수 있어 STARTUPINFO 보강.
                 kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+                try:
+                    si = subprocess.STARTUPINFO()
+                    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    si.wShowWindow = 0  # SW_HIDE
+                    kwargs["startupinfo"] = si
+                except Exception:
+                    pass
 
             # 진단 prelude: 사용자에게 GUI 가 살아 있음을 알려줌. AV / Defender 가
             # CreateProcess 단계에서 수 초 hang 되어도 이 라인은 미리 표시됨.
@@ -2805,6 +2909,15 @@ class NmapParserApp:
             self.proc = subprocess.Popen(cmd, **kwargs)
             self._log_queue.put(
                 f"[nmapParser] 프로세스 시작됨 (PID {self.proc.pid}). nmap 출력 대기 중...\n")
+            # 즉시 종료된 프로세스 검출 — 권한/경로 오류로 nmap 이 시작 직후 죽은 경우
+            try:
+                rc_now = self.proc.poll()
+                if rc_now is not None and rc_now != 0:
+                    self._log_queue.put(
+                        f"[nmapParser] 경고: nmap 이 시작 직후 종료됨 (returncode={rc_now}). "
+                        "권한/경로/옵션을 확인하세요.\n")
+            except Exception:
+                pass
 
             # 출력 무응답 watchdog 시작 (5초 / 30초 hint)
             self._scan_last_output_at = time.monotonic()
