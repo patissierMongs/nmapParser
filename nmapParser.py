@@ -183,6 +183,164 @@ DEFAULT_CATEGORIES = [
 ]
 
 # 서비스 노출 위험/공격 표면 가이드(최소 baseline) — categories.xlsx 의 5/6열 값이 비어있을 때 폴백.
+# SERVICE_PROTOCOL_GUIDE — 4-tuple (표준포트, 프로토콜, 암호화, 인증)
+#   프로토콜 enum: TCP / UDP / TCP+UDP
+#   암호화 enum: 평문 / TLS / 암호화 / 선택 (clear/encrypted depending on config) / 암호화(자체)
+#   인증 enum: 익명가능 / 사용자 / 키 / 인증서 / MFA / community / Kerberos / RAKP — 콤마 구분 가능
+SERVICE_PROTOCOL_GUIDE = {
+    # 원격접속
+    "ssh":           ("22", "TCP", "암호화", "사용자/키"),
+    "telnet":        ("23", "TCP", "평문", "사용자"),
+    "rdp":           ("3389", "TCP", "선택 (NLA시 강제)", "사용자"),
+    "ms-wbt-server": ("3389", "TCP", "선택 (NLA시 강제)", "사용자"),
+    "vnc":           ("5900", "TCP", "평문 (확장으로 TLS)", "사용자"),
+    "vnc-http":      ("5800", "TCP", "평문", "사용자"),
+    "vmrdp":         ("2179", "TCP", "선택", "사용자"),
+    "xrdp":          ("3389", "TCP", "선택", "사용자"),
+    "rlogin":        ("513", "TCP", "평문", "신뢰관계/사용자"),
+    "rsh":           ("514", "TCP", "평문", "신뢰관계"),
+    "shell":         ("514", "TCP", "평문", "신뢰관계"),
+    "rexec":         ("512", "TCP", "평문", "사용자"),
+    # 웹 / 프록시
+    "http":          ("80", "TCP", "평문", "익명가능"),
+    "http-alt":      ("8080", "TCP", "평문", "익명가능"),
+    "https":         ("443", "TCP", "TLS", "익명가능"),
+    "https-alt":     ("8443", "TCP", "TLS", "익명가능"),
+    "ssl/http":      ("443", "TCP", "TLS", "익명가능"),
+    "ssl/https":     ("443", "TCP", "TLS", "익명가능"),
+    "ajp13":         ("8009", "TCP", "평문", "사용자"),
+    "ajp":           ("8009", "TCP", "평문", "사용자"),
+    "http-proxy":    ("3128", "TCP", "선택", "사용자/익명"),
+    "ftp-proxy":     ("8021", "TCP", "선택", "사용자"),
+    "socks":         ("1080", "TCP", "선택", "사용자/익명"),
+    "webpush":       ("443", "TCP", "TLS", "토큰"),
+    # 인쇄
+    "ipp":           ("631", "TCP", "선택", "사용자/익명"),
+    "printer":       ("515", "TCP", "평문", "익명가능"),
+    "lpd":           ("515", "TCP", "평문", "익명가능"),
+    # DBMS
+    "mysql":         ("3306", "TCP", "선택", "사용자"),
+    "mariadb":       ("3306", "TCP", "선택", "사용자"),
+    "postgresql":    ("5432", "TCP", "선택", "사용자"),
+    "postgres":      ("5432", "TCP", "선택", "사용자"),
+    "ms-sql-s":      ("1433", "TCP", "선택", "사용자"),
+    "ms-sql-m":      ("1434", "UDP", "평문", "익명가능"),
+    "oracle-tns":    ("1521", "TCP", "선택", "사용자"),
+    "mongodb":       ("27017", "TCP", "선택", "사용자/익명"),
+    "mongo":         ("27017", "TCP", "선택", "사용자/익명"),
+    "redis":         ("6379", "TCP", "평문 (TLS 옵션)", "사용자/익명"),
+    "elasticsearch": ("9200", "TCP", "선택", "사용자/익명"),
+    "couchdb":       ("5984", "TCP", "선택", "사용자/익명"),
+    "neo4j":         ("7687", "TCP", "선택", "사용자"),
+    "influxdb":      ("8086", "TCP", "선택", "사용자/익명"),
+    "memcache":      ("11211", "TCP+UDP", "평문", "익명가능"),
+    "memcached":     ("11211", "TCP+UDP", "평문", "익명가능"),
+    "cassandra":     ("9042", "TCP", "선택", "사용자"),
+    "hbase":         ("16000", "TCP", "선택 (Kerberos)", "사용자/Kerberos"),
+    "db2":           ("50000", "TCP", "선택", "사용자"),
+    # 메시지큐
+    "amqp":          ("5672", "TCP", "선택", "사용자"),
+    "mqtt":          ("1883", "TCP", "선택", "사용자"),
+    "nats":          ("4222", "TCP", "선택", "토큰"),
+    "kafka":         ("9092", "TCP", "선택 (SASL/TLS)", "사용자/SASL"),
+    # 메일
+    "smtp":          ("25", "TCP", "선택 (STARTTLS)", "사용자/익명"),
+    "submission":    ("587", "TCP", "TLS (STARTTLS)", "사용자"),
+    "smtps":         ("465", "TCP", "TLS", "사용자"),
+    "pop3":          ("110", "TCP", "선택 (STARTTLS)", "사용자"),
+    "pop3s":         ("995", "TCP", "TLS", "사용자"),
+    "imap":          ("143", "TCP", "선택 (STARTTLS)", "사용자"),
+    "imaps":         ("993", "TCP", "TLS", "사용자"),
+    # 디렉토리 / 인증
+    "ldap":          ("389", "TCP+UDP", "평문 (StartTLS 옵션)", "사용자/익명"),
+    "ldaps":         ("636", "TCP", "TLS", "사용자"),
+    "cldap":         ("389", "UDP", "평문", "익명가능"),
+    "kerberos-sec":  ("88", "TCP+UDP", "암호화(자체)", "Kerberos"),
+    "kpasswd":       ("464", "TCP+UDP", "암호화(자체)", "Kerberos"),
+    # DNS
+    "domain":        ("53", "TCP+UDP", "평문 (DoT/DoH 옵션)", "익명가능"),
+    "dns":           ("53", "TCP+UDP", "평문 (DoT/DoH 옵션)", "익명가능"),
+    # 파일공유 / 전송
+    "microsoft-ds":  ("445", "TCP", "SMB signing 옵션", "사용자/익명"),
+    "netbios-ssn":   ("139", "TCP", "평문", "사용자/익명"),
+    "netbios-ns":    ("137", "UDP", "평문", "익명가능"),
+    "nbstat":        ("137", "UDP", "평문", "익명가능"),
+    "nfs":           ("2049", "TCP+UDP", "선택 (Kerberos)", "사용자/익명"),
+    "ftp":           ("21", "TCP", "평문 (FTPS 옵션)", "사용자/익명"),
+    "ftps":          ("990", "TCP", "TLS", "사용자"),
+    "tftp":          ("69", "UDP", "평문", "익명가능"),
+    "sftp":          ("22", "TCP", "암호화 (SSH)", "사용자/키"),
+    "rcp":           ("514", "TCP", "평문", "신뢰관계"),
+    "ftp-data":      ("20", "TCP", "평문", "사용자"),
+    # 시간 / 모니터링 / 로그
+    "ntp":           ("123", "UDP", "평문 (NTS 옵션)", "익명가능"),
+    "snmp":          ("161", "UDP", "평문 (v1/v2) / 암호화 (v3)", "community/사용자"),
+    "snmptrap":      ("162", "UDP", "평문 (v1/v2) / 암호화 (v3)", "community/사용자"),
+    "zabbix-agent":  ("10050", "TCP", "선택 (PSK/cert)", "PSK/인증서"),
+    "zabbix-trapper":("10051", "TCP", "선택", "사용자"),
+    "prometheus":    ("9090", "TCP", "선택", "사용자/익명"),
+    "grafana":       ("3000", "TCP", "선택 (TLS)", "사용자"),
+    "syslog":        ("514", "UDP", "평문 (TLS 옵션)", "익명가능"),
+    "splunk":        ("8000", "TCP", "TLS", "사용자"),
+    # VPN / VoIP / 미디어
+    "isakmp":        ("500", "UDP", "암호화(자체)", "PSK/인증서"),
+    "ipsec-nat-t":   ("4500", "UDP", "암호화(자체)", "PSK/인증서"),
+    "openvpn":       ("1194", "UDP", "TLS", "인증서"),
+    "sip":           ("5060", "TCP+UDP", "선택 (sips시 TLS)", "사용자"),
+    "sip-tls":       ("5061", "TCP", "TLS", "사용자"),
+    "rtsp":          ("554", "TCP", "선택", "사용자"),
+    # 네트워크 검색
+    "ssdp":          ("1900", "UDP", "평문", "익명가능"),
+    "upnp":          ("1900", "UDP", "평문", "익명가능"),
+    "mdns":          ("5353", "UDP", "평문", "익명가능"),
+    # RPC / 관리
+    "msrpc":         ("135", "TCP", "선택", "사용자"),
+    "rpcbind":       ("111", "TCP+UDP", "평문", "익명가능"),
+    "sunrpc":        ("111", "TCP+UDP", "평문", "익명가능"),
+    "nfs-or-iis":    ("135", "TCP", "선택", "사용자"),
+    "ipmi":          ("623", "UDP", "선택", "사용자/RAKP"),
+    "wsdapi":        ("5357", "TCP", "평문", "익명가능"),
+    "vmware-auth":   ("902", "TCP", "선택", "사용자"),
+    "ipcserver":     ("0", "TCP", "선택", "사용자"),
+    # 산업 제어
+    "modbus":        ("502", "TCP", "평문", "익명가능"),
+    "enip":          ("44818", "TCP+UDP", "평문", "익명가능"),
+    "bacnet":        ("47808", "UDP", "평문", "익명가능"),
+    "s7":            ("102", "TCP", "평문", "익명가능"),
+    "opcua":         ("4840", "TCP", "선택 (TLS+인증)", "사용자/인증서"),
+    "cadlock2":      ("0", "TCP", "선택", "사용자"),
+    # 진단 / 정보
+    "chargen":       ("19", "TCP+UDP", "평문", "익명가능"),
+    "echo":          ("7", "TCP+UDP", "평문", "익명가능"),
+    "discard":       ("9", "TCP+UDP", "평문", "익명가능"),
+    "finger":        ("79", "TCP", "평문", "익명가능"),
+    "irc":           ("6667", "TCP", "선택", "사용자"),
+    # 버전관리 / 분산
+    "git":           ("9418", "TCP", "선택 (SSH/TLS)", "사용자/익명"),
+    "svn":           ("3690", "TCP", "선택", "사용자/익명"),
+    "zookeeper":     ("2181", "TCP", "선택 (SASL)", "SASL/익명"),
+    "etcd":          ("2379", "TCP", "선택 (TLS+클라인증)", "인증서"),
+    # 컨테이너 / CI
+    "docker":        ("2375", "TCP", "선택 (TLS+클라인증)", "인증서/익명"),
+    "kubernetes":    ("6443", "TCP", "TLS", "인증서/Bearer"),
+    "jenkins":       ("8080", "TCP", "선택 (TLS)", "사용자"),
+    "gitlab":        ("443", "TCP", "TLS", "사용자"),
+    # 보안도구
+    "nessus":        ("8834", "TCP", "TLS", "사용자"),
+    # 기타
+    "914c-g":        ("0", "TCP", "선택", "사용자"),
+}
+
+
+def _protocol_guide_for(key):
+    """SERVICE_PROTOCOL_GUIDE 항목을 4-tuple (표준포트, 프로토콜, 암호화, 인증) 로 반환.
+    누락 시 빈 문자열."""
+    e = SERVICE_PROTOCOL_GUIDE.get(key, ())
+    if len(e) == 4:
+        return e
+    return ("", "", "", "")
+
+
 # SERVICE_EXPOSURE_GUIDE — 4-tuple (위험도, 노출위험, 공격표면, 출처)
 #   위험도: 상 / 중 / 하 (KISA 한국식 enum)
 #   출처: KISA 점검 항목 + CIS Controls v8 + MITRE ATT&CK Technique ID
@@ -361,9 +519,16 @@ def _exposure_guide_for(key):
     return ("", "", "", "")
 
 
+# categories.xlsx 13컬럼 권장 schema (첫 생성 시 사용 — 이후 사용자가 자유 이동/추가 가능)
+CATEGORIES_STD_COLUMNS = [
+    "서비스명", "표준포트", "프로토콜", "분류", "용도", "위험도",
+    "암호화", "인증", "노출위험", "공격표면", "출처", "설명", "점검메모",
+]
+CATEGORIES_REQUIRED = ("서비스명",)  # 누락 시 에러
+
+
 def default_categories_as_map():
-    """DEFAULT_CATEGORIES 튜플 → load_categories_xlsx 가 반환하는 dict 와 같은 포맷.
-    리턴 dict 키: category, usage, desc, risk, exposure_risk, attack_surface, source."""
+    """DEFAULT_CATEGORIES + GUIDE dict 들 → load_categories_xlsx 와 같은 dict 포맷."""
     catmap = {}
     for tup in DEFAULT_CATEGORIES:
         if len(tup) >= 4:
@@ -373,45 +538,65 @@ def default_categories_as_map():
         else:
             continue
         key = (name or "").strip().lower()
-        if key:
-            risk, exposure, surface, source = _exposure_guide_for(key)
-            catmap[key] = {
-                "category": category, "usage": usage, "desc": desc,
-                "risk": risk,
-                "exposure_risk": exposure,
-                "attack_surface": surface,
-                "source": source,
-            }
+        if not key:
+            continue
+        risk, exposure, surface, source = _exposure_guide_for(key)
+        port, proto, encryption, auth = _protocol_guide_for(key)
+        catmap[key] = {
+            "category": category, "usage": usage, "desc": desc,
+            "risk": risk,
+            "exposure_risk": exposure,
+            "attack_surface": surface,
+            "source": source,
+            "port": port,
+            "protocol": proto,
+            "encryption": encryption,
+            "auth": auth,
+            "memo": "",
+        }
     return catmap
 
 
+def _build_default_category_row(name, category, usage, desc):
+    """13컬럼 권장 순서로 한 행 만듦. 코드 dict 에서 표준포트/프로토콜/암호화/인증/위험도 등 보충."""
+    key = (name or "").strip().lower()
+    port, proto, encryption, auth = _protocol_guide_for(key)
+    risk, exposure, surface, source = _exposure_guide_for(key)
+    # std cols 순서: 서비스명, 표준포트, 프로토콜, 분류, 용도, 위험도, 암호화, 인증,
+    #                노출위험, 공격표면, 출처, 설명, 점검메모
+    return [name, port, proto, category, usage, risk, encryption, auth,
+            exposure, surface, source, desc, ""]
+
+
 def write_default_categories_xlsx(path):
-    """categories.xlsx 가 없을 때 기본값으로 새 파일 작성 (8컬럼).
-    schema: 서비스명 / 분류 / 용도 / 위험도 / 노출위험 / 공격표면 / 출처 / 설명
-    위험도 enum: 상 / 중 / 하 (KISA 한국식). 출처: KISA 항목 + CIS + MITRE."""
-    rows = [["서비스명", "분류", "용도", "위험도", "노출위험", "공격표면", "출처", "설명"]]
+    """categories.xlsx 가 없을 때 기본값으로 새 파일 작성 (13컬럼 권장 순서).
+    schema: 서비스명 / 표준포트 / 프로토콜 / 분류 / 용도 / 위험도 /
+            암호화 / 인증 / 노출위험 / 공격표면 / 출처 / 설명 / 점검메모
+    사용자는 이후 Excel 에서 컬럼 자유 이동/추가 가능 — reader 가 헤더 이름 기반."""
+    rows = [list(CATEGORIES_STD_COLUMNS)]
     for tup in DEFAULT_CATEGORIES:
-        row = list(tup)
-        # DEFAULT_CATEGORIES = (서비스명, 분류, 용도, 설명) — 4컬럼
-        if len(row) < 4:
-            row = row + [""] * (4 - len(row))
-        name, category, usage, desc = row[0], row[1], row[2], row[3]
-        key = (name or "").strip().lower()
-        risk, exposure, surface, source = _exposure_guide_for(key)
-        rows.append([name, category, usage, risk, exposure, surface, source, desc])
-    xlsx_io.write_xlsx(path, rows, col_widths=[20, 14, 12, 8, 38, 38, 36, 38])
+        if len(tup) < 4:
+            continue
+        rows.append(_build_default_category_row(tup[0], tup[1], tup[2], tup[3]))
+    # 컬럼 폭: 서비스명 / 표준포트 / 프로토콜 / 분류 / 용도 / 위험도 /
+    #          암호화 / 인증 / 노출위험 / 공격표면 / 출처 / 설명 / 점검메모
+    xlsx_io.write_xlsx(path, rows,
+        col_widths=[20, 9, 11, 14, 12, 8, 22, 22, 38, 38, 36, 38, 26])
 
 
 def load_categories_xlsx(path):
     """
-    categories.xlsx 파싱.
-    schema 호환:
-      - 8컬럼 (현행): 서비스명 / 분류 / 용도 / 위험도 / 노출위험 / 공격표면 / 출처 / 설명
-      - 6컬럼 (직전):  서비스명 / 분류 / 용도 / 설명 / 노출위험 / 공격표면
-      - 4컬럼 (구버전): 서비스명 / 분류 / 용도 / 설명
-      - 3컬럼 (최초):  서비스명 / 분류 / 설명
-    누락된 필드는 SERVICE_EXPOSURE_GUIDE 코드 dict 에서 자동 보충.
-    리턴: ({서비스명_lower: {category, usage, desc, risk, exposure_risk, attack_surface, source}}, errors)
+    categories.xlsx 파싱 — **헤더 이름 기반** (컬럼 위치 무관, 사용자가 Excel 에서 자유 이동 가능).
+
+    인식 헤더 (모두 선택, '서비스명' 만 필수):
+      서비스명, 표준포트, 프로토콜, 분류, 용도, 위험도, 암호화, 인증,
+      노출위험, 공격표면, 출처, 설명, 점검메모
+
+    구버전 호환 (헤더 일부 누락):
+      누락된 컬럼은 SERVICE_PROTOCOL_GUIDE / SERVICE_EXPOSURE_GUIDE 코드 dict 에서 자동 보충.
+    사용자 추가 비표준 컬럼 (예: '담당자', '점검일자') 은 무시 (저장 시 그대로 보존하려면 마이그 스크립트 사용).
+
+    리턴: ({서비스명_lower: {...}}, errors)
     """
     catmap = {}
     errors = []
@@ -422,70 +607,60 @@ def load_categories_xlsx(path):
     if not all_rows:
         return {}, ["categories.xlsx 가 비어 있음."]
 
-    header = [(c or "").strip() for c in all_rows[0]] if all_rows else []
-    n_cols = len(header)
-    # 8컬럼 schema 인지 (위험도 컬럼이 4번째에 있는 경우) 헤더로 판별
-    is_8col = n_cols >= 8 and "위험도" in header
-    # 6컬럼 (직전): 4번째가 "설명"
-    is_6col_legacy = (n_cols >= 6) and (not is_8col) and ("설명" in header[:4])
+    header = [(c or "").strip() for c in all_rows[0]]
+    # 헤더 이름 → 컬럼 인덱스 (위치 무관)
+    col_idx = {h: i for i, h in enumerate(header) if h}
+
+    # 필수 컬럼 검증
+    for req in CATEGORIES_REQUIRED:
+        if req not in col_idx:
+            return {}, [f"필수 컬럼 '{req}' 가 categories.xlsx 헤더에 없음. "
+                        f"현재 헤더: {header}"]
+
+    def cell(row, col_name, default=""):
+        i = col_idx.get(col_name)
+        if i is None or i >= len(row):
+            return default
+        v = row[i]
+        return (v or "").strip() if v is not None else default
 
     for i, row in enumerate(all_rows[1:], start=2):
         if not row or all(not (c or "").strip() for c in row):
             continue
-        if len(row) < 2:
-            errors.append(f"{i}번째 행: 컬럼 부족 — {row}")
-            continue
-        name = (row[0] or "").strip().lower()
-        cat = (row[1] or "").strip()
-        if not name or not cat:
+        name = cell(row, "서비스명").lower()
+        if not name:
             continue
 
-        # 기본값 (코드 dict 에서 보충)
+        # 코드 dict 에서 default 보충
         guide_risk, guide_exposure, guide_surface, guide_source = _exposure_guide_for(name)
+        guide_port, guide_proto, guide_encryption, guide_auth = _protocol_guide_for(name)
 
-        if is_8col:
-            usage = (row[2] or "").strip()
-            risk = (row[3] or "").strip() or guide_risk
-            exposure_risk = (row[4] or "").strip() or guide_exposure
-            attack_surface = (row[5] or "").strip() or guide_surface
-            source = (row[6] or "").strip() if len(row) > 6 else ""
-            if not source:
-                source = guide_source
-            desc = (row[7] or "").strip() if len(row) > 7 else ""
-        elif is_6col_legacy:
-            # 6컬럼 직전 schema: 서비스명 / 분류 / 용도 / 설명 / 노출위험 / 공격표면
-            usage = (row[2] or "").strip()
-            desc = (row[3] or "").strip()
-            exposure_risk = (row[4] or "").strip() or guide_exposure
-            attack_surface = (row[5] or "").strip() or guide_surface
-            risk = guide_risk
-            source = guide_source
-        elif len(row) >= 4:
-            # 4컬럼: 서비스명 / 분류 / 용도 / 설명
-            usage = (row[2] or "").strip()
-            desc = (row[3] or "").strip()
-            risk, exposure_risk, attack_surface, source = (
-                guide_risk, guide_exposure, guide_surface, guide_source)
-        elif len(row) == 3:
-            # 3컬럼: 서비스명 / 분류 / 설명
-            usage = ""
-            desc = (row[2] or "").strip()
-            risk, exposure_risk, attack_surface, source = (
-                guide_risk, guide_exposure, guide_surface, guide_source)
-        else:
-            usage = ""
-            desc = ""
-            risk, exposure_risk, attack_surface, source = (
-                guide_risk, guide_exposure, guide_surface, guide_source)
+        # 분류/용도가 빈 칸이면 default DEFAULT_CATEGORIES 에서도 못 가져옴 (없으면 빈 칸 OK)
+        category = cell(row, "분류")
+        if not category:
+            # DEFAULT_CATEGORIES 에서 보충
+            for tup in DEFAULT_CATEGORIES:
+                if len(tup) >= 4 and (tup[0] or "").strip().lower() == name:
+                    category = tup[1]
+                    break
+            if not category:
+                # 사용자가 분류 비웠으면 그래도 등록 (errors 에 warn 만)
+                errors.append(f"{i}번째 행 '{name}': 분류 컬럼 비어 있음 — DEFAULT_CATEGORIES 에도 매핑 없음")
+                category = "미분류"
 
         catmap[name] = {
-            "category": cat,
-            "usage": usage,
-            "desc": desc,
-            "risk": risk,
-            "exposure_risk": exposure_risk,
-            "attack_surface": attack_surface,
-            "source": source,
+            "category": category,
+            "usage": cell(row, "용도"),
+            "desc": cell(row, "설명"),
+            "risk": cell(row, "위험도") or guide_risk,
+            "exposure_risk": cell(row, "노출위험") or guide_exposure,
+            "attack_surface": cell(row, "공격표면") or guide_surface,
+            "source": cell(row, "출처") or guide_source,
+            "port": cell(row, "표준포트") or guide_port,
+            "protocol": cell(row, "프로토콜") or guide_proto,
+            "encryption": cell(row, "암호화") or guide_encryption,
+            "auth": cell(row, "인증") or guide_auth,
+            "memo": cell(row, "점검메모"),  # 점검메모는 default 없음 — 사용자 입력 only
         }
     return catmap, errors
 
@@ -639,27 +814,32 @@ def load_options_xlsx(path):
         return [], ["options.xlsx 가 비어 있습니다."]
 
     header = all_rows[0]
-    if not header or len(header) < 3:
-        return [], [f"options.xlsx 의 헤더가 잘못되었습니다 (3개 이상 컬럼 필요): {header}"]
+    if not header:
+        return [], ["options.xlsx 의 헤더가 비어 있습니다."]
     normalized = [(c or "").strip() for c in header]
+    # 헤더 이름 → 컬럼 인덱스 (위치 무관 — 사용자가 Excel 에서 컬럼 자유 이동 가능)
+    col_idx = {h: i for i, h in enumerate(normalized) if h}
     required = ["스캔 옵션", "옵션", "활성화"]
-    for idx, req in enumerate(required):
-        if len(normalized) <= idx or normalized[idx] != req:
-            return [], [f"options.xlsx 헤더 불일치: {idx+1}번째 컬럼은 '{req}' 이어야 합니다. (현재: '{normalized[idx] if len(normalized)>idx else ''}')"]
+    missing = [r for r in required if r not in col_idx]
+    if missing:
+        return [], [f"options.xlsx 필수 헤더 누락: {missing} (현재 헤더: {normalized})"]
+
+    def cell(row, col_name, default=""):
+        i = col_idx.get(col_name)
+        if i is None or i >= len(row):
+            return default
+        v = row[i]
+        return v if v is not None else default
 
     for i, row in enumerate(all_rows[1:], start=2):
         if not row or all(not (c or "").strip() for c in row):
             continue
-        if len(row) < 3:
-            errors.append(f"{i}번째 행: 컬럼 부족 (3개 이상 필요) — {row}")
-            continue
-        label = (row[0] or "").strip()
-        option = (row[1] or "").strip()
-        enabled_raw = (row[2] or "").strip()
-        # 그룹 컬럼은 선택적 (4번째 컬럼)
-        group = (row[3] or "").strip() if len(row) >= 4 else ""
-        # 상세설명도 선택적 (5번째 컬럼) — strip 안 함, 줄바꿈 보존
-        desc = (row[4] or "") if len(row) >= 5 else ""
+        label = (cell(row, "스캔 옵션") or "").strip()
+        option = (cell(row, "옵션") or "").strip()
+        enabled_raw = (cell(row, "활성화") or "").strip()
+        group = (cell(row, "그룹") or "").strip()
+        # 상세설명은 줄바꿈 보존 (strip 안 함)
+        desc = cell(row, "상세설명") or ""
         if not label:
             errors.append(f"{i}번째 행: '스캔 옵션' 라벨이 비어 있음 — {row}")
             continue
@@ -1237,13 +1417,22 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
                 key = n.rstrip("?").strip().lower()
                 if key and key in categories:
                     info = categories[key]
-                    return (info.get("category", "미분류"),
-                            info.get("usage", ""),
-                            info.get("risk", ""),
-                            info.get("exposure_risk", ""),
-                            info.get("attack_surface", ""),
-                            info.get("source", ""))
-        return "미분류", "", "", "", "", ""
+                    return {
+                        "category": info.get("category", "미분류"),
+                        "usage": info.get("usage", ""),
+                        "risk": info.get("risk", ""),
+                        "encryption": info.get("encryption", ""),
+                        "auth": info.get("auth", ""),
+                        "port": info.get("port", ""),
+                        "protocol": info.get("protocol", ""),
+                        "exposure_risk": info.get("exposure_risk", ""),
+                        "attack_surface": info.get("attack_surface", ""),
+                        "source": info.get("source", ""),
+                        "memo": info.get("memo", ""),
+                    }
+        return {"category": "미분류", "usage": "", "risk": "",
+                "encryption": "", "auth": "", "port": "", "protocol": "",
+                "exposure_risk": "", "attack_surface": "", "source": "", "memo": ""}
 
     root = parse_nmap_xml_resilient(xml_path)
     rows = []
@@ -1315,7 +1504,7 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
                 probed_short = ""
                 detail = ""
 
-            category, usage, risk, exposure_risk, attack_surface, source = _lookup_full_local(probed_short, guessed)
+            lookup = _lookup_full_local(probed_short, guessed)
             identification = compute_identification_status(svc_el)
             scripts = port.findall("script")
             nse_data = [(sc.get("id", "") or "", sc.get("output", "") or "") for sc in scripts]
@@ -1327,19 +1516,33 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
                 output_lines.append(f"[{sid}] {cleaned}" if sid else cleaned)
             output_joined = "\n".join(output_lines)
 
-            rows.append([addr, hostname, os_str, portid, proto, state, guessed, probed_short,
-                         identification, category, usage, risk, exposure_risk, attack_surface,
-                         source, detail, remarks, sids_joined, output_joined])
+            rows.append([
+                addr, hostname, os_str,
+                proto, portid, lookup.get("port", ""),
+                state, guessed, probed_short,
+                identification,
+                lookup.get("category", ""), lookup.get("usage", ""),
+                lookup.get("risk", ""),
+                lookup.get("encryption", ""), lookup.get("auth", ""),
+                lookup.get("exposure_risk", ""), lookup.get("attack_surface", ""),
+                lookup.get("source", ""),
+                detail, remarks,
+                sids_joined, output_joined,
+                lookup.get("memo", ""),
+            ])
 
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow([
             "IP", "호스트", "OS",
-            "PORT", "프로토콜",
+            "프로토콜", "포트", "표준포트",
             "포트상태", "추측서비스", "확인서비스(short)",
-            "식별", "분류", "용도", "위험도", "노출위험", "공격표면", "출처",
+            "식별", "분류", "용도",
+            "위험도", "암호화", "인증",
+            "노출위험", "공격표면", "출처",
             "상세(제품/버전)", "비고",
             "NSE스크립트명", "스크립트출력",
+            "점검메모",
         ])
         for r in rows:
             w.writerow(r)
@@ -1898,7 +2101,7 @@ class NmapParserApp:
         tk.Button(csv_frame, text="XML 폴더 일괄→CSV", command=self._convert_xml_folder_dialog).pack(side="left", padx=4)
         tk.Button(csv_frame, text="기준/현재 비교(Diff)", command=self._run_diff_dialog).pack(side="left", padx=4)
         tk.Label(csv_frame, text=
-                 "  CSV 19컬럼: IP, 호스트, OS, PORT, 프로토콜, 포트상태, 추측/확인서비스, 식별, 분류, 용도, 위험도, 노출위험, 공격표면, 출처, 상세, 비고, NSE스크립트명, 스크립트출력",
+                 "  CSV 23컬럼: IP, 호스트, OS, 프로토콜, 포트, 표준포트, 포트상태, 추측/확인서비스, 식별, 분류, 용도, 위험도, 암호화, 인증, 노출위험, 공격표면, 출처, 상세, 비고, NSE, 출력, 점검메모",
                  fg="#555").pack(side="left", padx=4)
 
         # 7. 실행 버튼
@@ -2210,19 +2413,31 @@ class NmapParserApp:
 
     def _lookup_full(self, probed_name, guessed_name):
         """확인서비스(short) 또는 추측서비스 이름으로 lookup.
-        리턴: (분류, 용도, 위험도, 노출위험, 공격표면, 출처). 못 찾으면 6개 빈 값."""
+        리턴 dict (모든 키 항상 존재):
+            category, usage, risk, encryption, auth, port, protocol,
+            exposure_risk, attack_surface, source, memo
+        """
         for n in (probed_name, guessed_name):
             if n:
                 key = n.rstrip("?").strip().lower()
                 if key and key in self.categories:
                     info = self.categories[key]
-                    return (info.get("category", "미분류"),
-                            info.get("usage", ""),
-                            info.get("risk", ""),
-                            info.get("exposure_risk", ""),
-                            info.get("attack_surface", ""),
-                            info.get("source", ""))
-        return "미분류", "", "", "", "", ""
+                    return {
+                        "category": info.get("category", "미분류"),
+                        "usage": info.get("usage", ""),
+                        "risk": info.get("risk", ""),
+                        "encryption": info.get("encryption", ""),
+                        "auth": info.get("auth", ""),
+                        "port": info.get("port", ""),
+                        "protocol": info.get("protocol", ""),
+                        "exposure_risk": info.get("exposure_risk", ""),
+                        "attack_surface": info.get("attack_surface", ""),
+                        "source": info.get("source", ""),
+                        "memo": info.get("memo", ""),
+                    }
+        return {"category": "미분류", "usage": "", "risk": "",
+                "encryption": "", "auth": "", "port": "", "protocol": "",
+                "exposure_risk": "", "attack_surface": "", "source": "", "memo": ""}
 
     def _open_options_folder(self):
         """options.xlsx 폴더 열기 — 메모리 모드 / UNC hang 대비 try/except."""
@@ -3479,7 +3694,7 @@ class NmapParserApp:
                     probed_short = ""
                     detail = ""
 
-                category, usage, risk, exposure_risk, attack_surface, source = self._lookup_full(probed_short, guessed)
+                lookup = self._lookup_full(probed_short, guessed)
 
                 # 식별 (4값) — service XML 노드 그대로 분석
                 identification = compute_identification_status(svc_el)
@@ -3498,13 +3713,18 @@ class NmapParserApp:
                 output_joined = "\n".join(output_lines)
 
                 rows.append([
-                    addr, hostname, os_str,                     # host-level (이슈 4)
-                    portid, proto,                              # port-level (proto 이슈 4)
+                    addr, hostname, os_str,                     # host-level
+                    proto, portid, lookup.get("port", ""),       # 프로토콜 / 포트 / 표준포트
                     state, guessed, probed_short,
-                    identification, category, usage,
-                    risk, exposure_risk, attack_surface, source,
+                    identification,
+                    lookup.get("category", ""), lookup.get("usage", ""),
+                    lookup.get("risk", ""),
+                    lookup.get("encryption", ""), lookup.get("auth", ""),
+                    lookup.get("exposure_risk", ""), lookup.get("attack_surface", ""),
+                    lookup.get("source", ""),
                     detail, remarks,
                     sids_joined, output_joined,
+                    lookup.get("memo", ""),                     # 점검메모 (사용자 편집)
                 ])
 
         csv_path = (self.output_prefix or "") + ".csv"
@@ -3512,12 +3732,14 @@ class NmapParserApp:
             w = csv.writer(f)
             w.writerow([
                 "IP", "호스트", "OS",
-                "PORT", "프로토콜",
+                "프로토콜", "포트", "표준포트",
                 "포트상태", "추측서비스", "확인서비스(short)",
                 "식별", "분류", "용도",
-                "위험도", "노출위험", "공격표면", "출처",
+                "위험도", "암호화", "인증",
+                "노출위험", "공격표면", "출처",
                 "상세(제품/버전)", "비고",
                 "NSE스크립트명", "스크립트출력",
+                "점검메모",
             ])
             for r in rows:
                 w.writerow(r)
