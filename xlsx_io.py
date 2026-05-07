@@ -277,10 +277,12 @@ def _build_shared_strings_xml(shared_str_idx):
 
 def write_xlsx(path, rows, col_widths=None):
     """
-    rows 를 xlsx 로 저장.
+    rows 를 xlsx 로 저장 (atomic — tempfile + os.replace).
     - 모든 셀이 shared string (t="s") → Excel 에서 '-Pn', '=foo', '@bar' 도 절대 수식 해석 안 됨.
     - 첫 행은 굵게.
     - col_widths 가 주어지면 그 너비 적용.
+    - **atomic**: 같은 디렉토리에 임시 파일로 먼저 쓴 후 os.replace 로 한 번에 교체.
+      쓰기 도중 UNC 끊김 / 디스크 가득참 / Excel 잠금 등에서 원본 손상 방지.
     """
     shared_str_idx = {}  # text -> index
     sheet_xml = _build_sheet_xml(rows, shared_str_idx, col_widths)
@@ -290,16 +292,31 @@ def write_xlsx(path, rows, col_widths=None):
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
 
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("[Content_Types].xml", CONTENT_TYPES_XML)
-        z.writestr("_rels/.rels", ROOT_RELS_XML)
-        z.writestr("docProps/core.xml", DOCPROPS_CORE_XML)
-        z.writestr("docProps/app.xml", DOCPROPS_APP_XML)
-        z.writestr("xl/workbook.xml", WORKBOOK_XML)
-        z.writestr("xl/_rels/workbook.xml.rels", WORKBOOK_RELS_XML)
-        z.writestr("xl/styles.xml", STYLES_XML)
-        z.writestr("xl/sharedStrings.xml", shared_strings_xml)
-        z.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+    # 같은 디렉토리에 .tmp 임시 파일 (다른 디렉토리면 os.replace 가 cross-device 실패할 수 있음)
+    base = os.path.basename(path)
+    tmp_path = os.path.join(parent or ".", f".{base}.tmp.{os.getpid()}")
+
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", CONTENT_TYPES_XML)
+            z.writestr("_rels/.rels", ROOT_RELS_XML)
+            z.writestr("docProps/core.xml", DOCPROPS_CORE_XML)
+            z.writestr("docProps/app.xml", DOCPROPS_APP_XML)
+            z.writestr("xl/workbook.xml", WORKBOOK_XML)
+            z.writestr("xl/_rels/workbook.xml.rels", WORKBOOK_RELS_XML)
+            z.writestr("xl/styles.xml", STYLES_XML)
+            z.writestr("xl/sharedStrings.xml", shared_strings_xml)
+            z.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+        # atomic replace
+        os.replace(tmp_path, path)
+    except Exception:
+        # 임시 파일 정리
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------- reader

@@ -916,6 +916,7 @@ def find_nmap_exe():
       2. C:\\Program Files (x86)\\Nmap\\nmap.exe
       3. C:\\Program Files\\Nmap\\nmap.exe
       4. _app_dir()/nmap.exe (동봉 케이스)
+      5. shutil.which("nmap") — PATH 등록된 비표준 설치 (예: chocolatey, scoop, MSYS2)
     """
     env_path = os.environ.get("NMAPPARSER_NMAP_EXE", "").strip()
     if env_path and os.path.isfile(env_path):
@@ -929,6 +930,11 @@ def find_nmap_exe():
     for c in candidates:
         if os.path.isfile(c):
             return c
+    # PATH 에 등록된 nmap 자동 탐지 (chocolatey, scoop 등)
+    import shutil as _shutil
+    found = _shutil.which("nmap")
+    if found and os.path.isfile(found):
+        return found
     return None
 
 
@@ -1960,6 +1966,27 @@ class NmapParserApp:
 
     # ----------------------------- 정적 UI (옵션 패널 외 모든 것)
     def _build_static_ui(self):
+        # 0a. 관리자 권한 배너 (Windows 비관리자 시 빨간 경고)
+        if sys.platform == "win32":
+            try:
+                import ctypes as _ctypes
+                is_admin = bool(_ctypes.windll.shell32.IsUserAnAdmin())
+            except Exception:
+                is_admin = True  # 확인 실패면 경고 안 띄움
+            if not is_admin:
+                admin_banner = tk.Label(
+                    self.root,
+                    text="⚠ 일반 사용자 권한으로 실행 중 — '-sS' (SYN), '-sU' (UDP) 스캔은 관리자 권한 필요. "
+                         ".bat / .exe 를 우클릭 → '관리자 권한으로 실행' 권장. "
+                         "현재 권한으로는 'Connect (-sT)' 라디오 선택 시 정상 동작.",
+                    bg="#c62828", fg="white",
+                    font=("Segoe UI", 9, "bold"),
+                    anchor="w", justify="left",
+                    wraplength=1200,
+                    padx=8, pady=4,
+                )
+                admin_banner.pack(fill="x", padx=8, pady=(8, 0))
+
         # 0. nmap 탐지
         top = tk.Frame(self.root)
         top.pack(fill="x", padx=8, pady=(8, 4))
@@ -2100,6 +2127,8 @@ class NmapParserApp:
         tk.Button(csv_frame, text="XML 파일→CSV", command=self._convert_xml_file_dialog).pack(side="left", padx=4)
         tk.Button(csv_frame, text="XML 폴더 일괄→CSV", command=self._convert_xml_folder_dialog).pack(side="left", padx=4)
         tk.Button(csv_frame, text="기준/현재 비교(Diff)", command=self._run_diff_dialog).pack(side="left", padx=4)
+        tk.Button(csv_frame, text="📂 CSV 취합", command=self._collect_csv_dialog,
+                  bg="#e3f2fd").pack(side="left", padx=4)
         tk.Label(csv_frame, text=
                  "  CSV 23컬럼: IP, 호스트, OS, 프로토콜, 포트, 표준포트, 포트상태, 추측/확인서비스, 식별, 분류, 용도, 위험도, 암호화, 인증, 노출위험, 공격표면, 출처, 상세, 비고, NSE, 출력, 점검메모",
                  fg="#555").pack(side="left", padx=4)
@@ -3164,6 +3193,14 @@ class NmapParserApp:
             stream_encoding = "utf-8"
 
         try:
+            # cwd 는 임시 폴더로 — 사용자가 UNC/매핑 드라이브 위에서 실행한 경우 nmap stdout
+            # 이 stall 되는 사례 회피. -oA 는 항상 절대 경로라 cwd 영향 없음.
+            import tempfile as _tempfile
+            try:
+                _scan_cwd = _tempfile.gettempdir()
+            except Exception:
+                _scan_cwd = None
+
             kwargs = dict(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -3172,6 +3209,7 @@ class NmapParserApp:
                 # PyInstaller --windowed 환경에서 부모 프로세스의 stdin/stdout 핸들이
                 # None 또는 NUL 일 수 있어, 자식이 부모 stdin 을 잘못 상속받지 않게 명시 차단.
                 stdin=subprocess.DEVNULL,
+                cwd=_scan_cwd,
             )
             if sys.platform == "win32":
                 # CREATE_NO_WINDOW + STARTUPINFO 둘 다 명시. 일부 Windows 버전에서
@@ -3548,6 +3586,93 @@ class NmapParserApp:
         if fails:
             msg += "\n\n실패 목록:\n" + "\n".join(fails[:15])
         messagebox.showinfo("일괄 변환 결과", msg)
+
+    def _collect_csv_dialog(self):
+        """폴더 선택 → 하위 모든 *.csv 를 새 폴더로 복사 (recursive).
+        시간축 누적 점검 결과를 한 폴더에 모으는 용도."""
+        from pathlib import Path
+        import shutil as _shutil
+        from datetime import datetime as _dt
+
+        src = filedialog.askdirectory(title="CSV 가 들어 있는 상위 폴더 선택 (recursive)")
+        if not src:
+            return
+        if not os.path.isdir(src):
+            messagebox.showerror("오류", f"폴더를 찾을 수 없습니다:\n{src}")
+            return
+
+        ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+        dst_dir = os.path.join(src, f"_collected_{ts}")
+        try:
+            os.makedirs(dst_dir, exist_ok=True)
+        except OSError as e:
+            messagebox.showerror("폴더 생성 실패",
+                f"수집 폴더를 만들 수 없습니다.\n경로: {dst_dir}\n원인: {e}")
+            return
+
+        # recursive 하게 *.csv 찾기 — 단 방금 만든 dst_dir 자체는 제외
+        try:
+            csv_paths = []
+            for p in Path(src).rglob("*.csv"):
+                # dst_dir 안의 파일은 건너뜀 (재실행 시 중복 방지)
+                try:
+                    if Path(dst_dir) in p.parents:
+                        continue
+                except Exception:
+                    pass
+                if p.is_file():
+                    csv_paths.append(p)
+        except OSError as e:
+            messagebox.showerror("탐색 실패", f"파일 탐색 중 오류:\n{e}")
+            return
+
+        if not csv_paths:
+            messagebox.showinfo("CSV 없음", f"하위 폴더에 .csv 파일이 없습니다.\n경로: {src}")
+            try:
+                os.rmdir(dst_dir)
+            except OSError:
+                pass
+            return
+
+        # 복사 (충돌 시 _2, _3 suffix)
+        copied = 0
+        oldest = newest = None
+        fail_list = []
+        for src_path in csv_paths:
+            try:
+                stem = src_path.stem
+                suffix = src_path.suffix
+                target = os.path.join(dst_dir, src_path.name)
+                idx = 2
+                while os.path.exists(target):
+                    target = os.path.join(dst_dir, f"{stem}_{idx}{suffix}")
+                    idx += 1
+                _shutil.copy2(str(src_path), target)
+                copied += 1
+                mtime = src_path.stat().st_mtime
+                if oldest is None or mtime < oldest:
+                    oldest = mtime
+                if newest is None or mtime > newest:
+                    newest = mtime
+            except (OSError, _shutil.Error) as e:
+                fail_list.append(f"{src_path.name}: {e}")
+
+        oldest_str = _dt.fromtimestamp(oldest).strftime("%Y-%m-%d %H:%M") if oldest else "—"
+        newest_str = _dt.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M") if newest else "—"
+        msg = (f"CSV 취합 완료\n\n"
+               f"수집 폴더: {dst_dir}\n"
+               f"수집된 CSV: {copied}개 (실패 {len(fail_list)}개)\n"
+               f"가장 오래된 파일: {oldest_str}\n"
+               f"가장 최근 파일: {newest_str}")
+        if fail_list:
+            msg += "\n\n실패 (앞 10개):\n" + "\n".join(fail_list[:10])
+        messagebox.showinfo("CSV 취합 결과", msg)
+        # 폴더 자동 열기
+        try:
+            if sys.platform == "win32":
+                os.startfile(dst_dir)  # type: ignore
+        except OSError:
+            pass
 
     def _run_diff_dialog(self):
         """GUI에서 기준/현재 파일을 선택해 diff CSV 생성."""

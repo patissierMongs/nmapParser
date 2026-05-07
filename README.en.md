@@ -174,6 +174,32 @@ Workarounds for restrictive setups:
   `nmap -sS ...` line runs verbatim. Output flags (`-oA` etc.) you provide
   are stripped and re-added to keep the CSV pipeline working.
 
+## CSV collection (time-series audit)
+
+CSVs accumulate across recurring scans and get scattered. The **`📂 CSV 취합`** button gathers them into one folder:
+
+1. In the `결과 CSV 변환` area, click **`📂 CSV 취합`**.
+2. Pick the parent folder containing the scattered CSVs (search is recursive).
+3. `<chosen>/_collected_<yyyyMMdd_HHmmss>/` is auto-created and all `*.csv` are copied in (originals preserved; name conflicts get `_2`, `_3`).
+4. Done popup shows count, oldest/newest timestamps, and any failures.
+5. The folder opens automatically on Windows.
+
+Use the gathered folder for whole-asset review, time-series comparison via the Diff feature, or export to external tooling.
+
+## Corporate / restricted environments
+
+Common symptoms and fixes when running on locked-down corporate PCs:
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| SmartScreen "Unknown publisher" on first run | unsigned .exe (personal build) | "More info → Run anyway", or use `nmapParser-x86.zip` (`--onedir`) — archives are generally not blocked the same way |
+| AV quarantines the .exe | UPX signature / PyInstaller heuristic | v0.3.1+ ships with UPX disabled. If still blocked, use the `--onedir` zip |
+| "Starting Nmap" never shows, GUI looks frozen | Python build difference — stdout has no `read1` | Fixed in v0.2 (`a045f58`); use latest .exe |
+| AppLocker / GPO blocks user-folder .exe | policy | Whitelist request, or run `python nmapParser.py` via PowerShell |
+| Korean username path (`C:\Users\홍길동\`) + `--onefile` | PyInstaller `_MEI` extraction issue with non-ASCII path on some builds | Use `--onedir` zip |
+| nmap stdout stalls on UNC / mapped drive | nmap cwd on UNC can deadlock IO | v0.3.1+ forces Popen `cwd=tempdir` — auto-avoided |
+| DLP blocks option xlsx | policy | Set `NMAPPARSER_DATA_DIR` env var to a permitted folder |
+
 ## Limits
 
 - `-sS` / `-O` needs admin. As a normal user, pick the `Connect` radio in `TCP 스캔 타입`.

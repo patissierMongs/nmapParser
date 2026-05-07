@@ -219,6 +219,32 @@ nmap -Pn -n -sS -sU -sV --version-all \
   켜면 **다른 모든 옵션 무시**하고 `nmap -sS ...` 풀 명령어를 그대로 실행.
   출력 플래그(`-oA` 등)는 자동 제거 후 우리 CSV 파이프라인용 `-oA` 로 보강.
 
+## CSV 취합 (시간축 누적 점검)
+
+매번 점검할 때마다 CSV 가 출력 폴더에 쌓이면 점점 폴더가 흩어집니다. **`📂 CSV 취합`** 버튼으로 한 폴더에 모음:
+
+1. GUI 의 `결과 CSV 변환` 영역에서 **`📂 CSV 취합`** 클릭
+2. CSV 들이 들어 있는 상위 폴더 선택 (recursive)
+3. `<선택폴더>/_collected_<yyyyMMdd_HHmmss>/` 자동 생성, 모든 `*.csv` 복사 (원본 보존, 충돌 시 `_2`, `_3` suffix)
+4. 완료 popup: 수집 개수, 가장 오래된/최근 파일 timestamp, 실패 목록
+5. Windows 에서 자동으로 그 폴더 열기
+
+수집된 폴더를 통째로 보고 / 외부 분석 도구로 보내거나, 같은 자산의 시간축 비교 (Diff 기능) 의 입력으로 사용하세요.
+
+## 회사 환경 호환
+
+기업 PC / 보안 정책 엄격 환경에서 자주 마주치는 이슈와 해결:
+
+| 증상 | 원인 | 해결 |
+|---|---|---|
+| 첫 실행 시 SmartScreen "알 수 없는 게시자" | 미서명 .exe (개인 빌드) | "추가 정보 → 실행". 또는 `--onedir` zip (`nmapParser-x86.zip`) 권장 — Windows 가 archive 안 파일은 일반적으로 차단 안 함 |
+| AV 가 .exe 격리 | UPX 압축 시그니처 / PyInstaller 휴리스틱 | v0.3.1+ 는 UPX 비활성. 그래도 막히면 `--onedir` zip 사용 |
+| `Starting Nmap` 안 보이고 멈춰 보임 | Python 버전 차이로 stdout `read1` 없음 | v0.2 `a045f58` 에서 fix. 최신 .exe 사용 |
+| AppLocker / GPO 가 사용자 폴더 .exe 차단 | 정책 | IT 에 화이트리스트 요청. 또는 PowerShell 으로 `python nmapParser.py` 실행 |
+| 한국어 사용자명 폴더 (`C:\Users\홍길동\`) + `--onefile` | PyInstaller _MEI 임시 풀기 시 한글 path 일부 버전 이슈 | `--onedir` zip 사용 권장 |
+| UNC / 네트워크 드라이브 위에서 실행 시 nmap 출력 stall | nmap 의 cwd 가 UNC 면 IO 차단 가능 | v0.3.1+ 는 Popen `cwd=tempdir` 강제 — 자동 회피 |
+| DLP 가 옵션 xlsx 차단 | 정책 | `NMAPPARSER_DATA_DIR` 환경변수로 허용된 폴더 강제 지정 |
+
 ## 한계
 
 - `-sS` / `-O` 는 관리자 권한 필요. 일반 사용자는 라디오에서 `Connect` 선택.
