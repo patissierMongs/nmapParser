@@ -26,9 +26,12 @@ import sys
 import csv
 import shlex
 import ipaddress
+import locale
 import queue
 import subprocess
+import tempfile
 import threading
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -177,6 +180,38 @@ DEFAULT_CATEGORIES = [
 ]
 
 
+def default_options_as_rows():
+    """DEFAULT_OPTIONS 튜플 → load_options_xlsx 가 반환하는 dict 행 리스트와 같은 포맷.
+    메모리-only 모드(이슈 8 fallback) 에서 사용."""
+    rows = []
+    for i, (label, option, enabled, group, desc) in enumerate(DEFAULT_OPTIONS, start=2):
+        rows.append({
+            "label": label,
+            "option": option,
+            "enabled": str(enabled) == "1",
+            "group": group,
+            "desc": desc,
+            "lineno": i,
+        })
+    return rows
+
+
+def default_categories_as_map():
+    """DEFAULT_CATEGORIES 튜플 → load_categories_xlsx 가 반환하는 dict 와 같은 포맷."""
+    catmap = {}
+    for tup in DEFAULT_CATEGORIES:
+        if len(tup) >= 4:
+            name, category, usage, desc = tup[0], tup[1], tup[2], tup[3]
+        elif len(tup) == 3:
+            name, category, usage, desc = tup[0], tup[1], "", tup[2]
+        else:
+            continue
+        key = (name or "").strip().lower()
+        if key:
+            catmap[key] = {"category": category, "usage": usage, "desc": desc}
+    return catmap
+
+
 def write_default_categories_xlsx(path):
     """categories.xlsx 가 없을 때 기본값으로 새 파일 작성 (4컬럼)."""
     rows = [["서비스명", "분류", "용도", "설명"]]
@@ -286,6 +321,9 @@ DEFAULT_OPTIONS = [
      "동시 in-flight probe 100개까지. 빠른 네트워크에서 처리량 증가."),
     ("Aggressive 모드 (-A)", "-A", "0", "",
      "공격적 옵션 묶음 (-O OS 식별 + -sV + -sC default NSE + --traceroute). phase1 default 에는 미포함."),
+    ("OS 탐지 (-O)", "-O", "0", "",
+     "OS 핑거프린팅. raw socket 권한(=관리자) 필요. 일반 사용자 권한이면 nmap 이 무시. "
+     "결과는 CSV 의 OS 컬럼에 채워짐 (정확도 % 포함). 기본 비활성."),
     ("진행 stats 1분마다 출력 (--stats-every 1m)", "--stats-every 1m", "1", "",
      "1분마다 nmap 이 진행률 stats 라인을 stdout 에 강제로 씀. GUI 로그창이 buffer 때문에 한참 비어 보이는 문제 방지. 끄지 않는 것 권장."),
 
@@ -312,6 +350,32 @@ DEFAULT_OPTIONS = [
      "LDAP root DSE 정보 추출. AD/LDAP 서버 도메인, naming context. (phase1 default: 0)"),
     ("raw 응답 캡처 (식별 실패 포트)", "--script fingerprint-strings", "1", "",
      "식별 실패한 포트의 원본 응답 바이트 캡쳐 (fingerprint-strings). unknown 서비스 수동 분석 필수."),
+
+    # ---- 서비스 커버리지 보강 (이슈 11)
+    ("FTP 익명 로그인 / 시스템 식별",
+     "--script ftp-anon,ftp-syst", "1", "",
+     "FTP 익명 로그인 허용 여부 + SYST 응답(서버 OS/제품). 외부 노출 FTP 점검 핵심."),
+    ("Telnet 암호화 지원 식별",
+     "--script telnet-encryption", "1", "",
+     "Telnet 서버 RFC2946 암호화 지원 여부. 미지원이면 평문 노출."),
+    ("DNS 재귀 응답 / 서버 식별 (NSID)",
+     "--script dns-recursion,dns-nsid", "1", "",
+     "외부 open resolver 여부 + 서버 식별자(NSID, BIND 버전 등). 외부 DNS 점검 1순위."),
+    ("VNC 식별 (버전 / 보안 타입 / 타이틀)",
+     "--script vnc-info,vnc-title", "1", "",
+     "VNC 서버 protocol 버전, 지원 security type(none/VNCAuth/TLS), 데스크톱 타이틀."),
+    ("NTP monlist (DDoS amp 위험)",
+     "--script ntp-monlist", "1", "",
+     "ntpdc monlist 응답 — DDoS amplification 가능 여부. -sU 와 함께 의미."),
+    ("일반 배너 캡처 (Rlogin / RSH 등 보완)",
+     "--script banner", "0", "",
+     "포트 첫 수십 바이트 그대로 캡처. Rlogin/RSH 등 NSE 직접 스크립트가 부족한 서비스 식별 보완. 기본 OFF."),
+    ("SSH 인증 방식 / 알고리즘 (선택)",
+     "--script ssh-auth-methods,ssh2-enum-algos", "0", "",
+     "지원 인증(passwd/pubkey/keyboard) 및 KEX/cipher/MAC 알고리즘 목록. 약한 알고리즘 노출 식별. ssh-hostkey 보다 무거워 default OFF."),
+    ("SNMP sysDescr (선택)",
+     "--script snmp-sysdescr", "0", "",
+     "snmp-info 의 community probe 보다 단순한 sysDescr 단독 조회. 빠른 SNMP 식별. 기본 OFF."),
 ]
 
 
@@ -437,7 +501,16 @@ ET_ParseError = ET.ParseError
 # ============================================================ nmap helpers
 
 def find_nmap_exe():
-    """기본 위치 -> 동봉 폴더 순으로 nmap.exe 탐색."""
+    """nmap 실행 파일 탐색.
+    우선순위:
+      1. NMAPPARSER_NMAP_EXE 환경변수 (회사 이미지에서 비표준 위치 강제 가능)
+      2. C:\\Program Files (x86)\\Nmap\\nmap.exe
+      3. C:\\Program Files\\Nmap\\nmap.exe
+      4. _app_dir()/nmap.exe (동봉 케이스)
+    """
+    env_path = os.environ.get("NMAPPARSER_NMAP_EXE", "").strip()
+    if env_path and os.path.isfile(env_path):
+        return env_path
     here = _app_dir()
     candidates = [
         r"C:\Program Files (x86)\Nmap\nmap.exe",
@@ -628,6 +701,222 @@ def _app_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _fmt_option_label(row):
+    """옵션 라벨 표시 포맷: '[-sS] SYN' / '[--script ssh-hostkey] SSH 호스트키'.
+    옵션 문자열이 길면 첫 토큰만 표시 ('[--script] HTTP 식별').
+    """
+    opt = (row.get("option") or "").strip()
+    label = row.get("label") or ""
+    if not opt:
+        return label
+    head = opt if len(opt) <= 24 else opt.split()[0]
+    return f"[{head}] {label}"
+
+
+def _is_udp_related(option_str):
+    """option 문자열이 UDP 스캔과 직접 관련 있으면 True.
+    조건: '-sU' 토큰 포함, 또는 '-p' 값 / '-p<value>' 의 값이 'U:' 포함.
+    """
+    if not option_str:
+        return False
+    toks = option_str.split()
+    if "-sU" in toks:
+        return True
+    for i, t in enumerate(toks):
+        if t == "-p" and i + 1 < len(toks) and "U:" in toks[i + 1]:
+            return True
+        if t.startswith("-p") and len(t) > 2 and "U:" in t[2:]:
+            return True
+    return False
+
+
+def _user_data_dir():
+    """OS 별 쓰기 가능한 사용자 데이터 폴더. 없으면 생성 시도.
+    - Windows: %APPDATA%\\nmapParser
+    - macOS:   ~/Library/Application Support/nmapParser
+    - 그 외:   $XDG_CONFIG_HOME/nmapParser 또는 ~/.config/nmapParser
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    d = os.path.join(base, "nmapParser")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        pass
+    return d
+
+
+def _is_dir_writable(path):
+    """파일을 실제로 한 번 써 보고 지움 — read-only 폴더(예: Program Files) 감지.
+
+    회사 보안 환경의 AV 필터드라이버는 짧은 PermissionError / FileNotFoundError /
+    OSError 를 던질 수 있으므로 모두 False 처리. probe 파일명에 PID 를 섞어
+    동시 실행 충돌 방지.
+    """
+    if not path or not os.path.isdir(path):
+        return False
+    probe = os.path.join(path, f".nmapParser_write_probe.{os.getpid()}")
+    try:
+        with open(probe, "w") as f:
+            f.write("")
+        try:
+            os.remove(probe)
+        except OSError:
+            pass  # 못 지워도 쓰기는 됐으니 OK
+        return True
+    except (OSError, PermissionError, FileNotFoundError):
+        return False
+    except Exception:
+        # AV 필터드라이버가 별도 예외를 던질 수도 있음 — 모두 False
+        return False
+
+
+_DATA_DIR_PIN_NAME = "data_dir.txt"      # 구버전 호환 (단일 폴더만 저장)
+_CONFIG_JSON_NAME = "config.json"        # {data_dir, options_xlsx, categories_xlsx}
+
+
+def _read_pin_config():
+    """user_data_dir 의 config.json 을 읽음.
+    구버전 data_dir.txt 만 있을 경우엔 {"data_dir": ...} 로 변환 반환.
+    """
+    udd = _user_data_dir()
+    cfg = {}
+    try:
+        p = os.path.join(udd, _CONFIG_JSON_NAME)
+        if os.path.isfile(p):
+            import json
+            with open(p, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            if isinstance(obj, dict):
+                cfg = obj
+    except (OSError, ValueError):
+        cfg = {}
+    if not cfg:
+        # 구버전 data_dir.txt 폴백
+        try:
+            old = os.path.join(udd, _DATA_DIR_PIN_NAME)
+            if os.path.isfile(old):
+                with open(old, "r", encoding="utf-8") as f:
+                    d = f.read().strip()
+                if d:
+                    cfg = {"data_dir": d}
+        except OSError:
+            pass
+    return cfg
+
+
+def _write_pin_config(cfg):
+    """config.json 에 기록. 실패해도 조용히 넘어감."""
+    try:
+        import json
+        p = os.path.join(_user_data_dir(), _CONFIG_JSON_NAME)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError:
+        return False
+
+
+def _read_pinned_data_dir():
+    """구버전 호환 — 새 코드는 _read_pin_config() 사용 권장."""
+    return _read_pin_config().get("data_dir") or None
+
+
+def _write_pinned_data_dir(path):
+    """구버전 호환 — config.json 의 data_dir 항목을 갱신."""
+    cfg = _read_pin_config()
+    cfg["data_dir"] = path or ""
+    return _write_pin_config(cfg)
+
+
+def _temp_data_dir():
+    """tempfile.gettempdir() 하위에 nmapParser/ 를 만들어 반환. 실패 시 None.
+    회사 보안 환경에서 %APPDATA% 까지 막혔을 때 마지막 디스크 fallback.
+    """
+    try:
+        d = os.path.join(tempfile.gettempdir(), "nmapParser")
+        os.makedirs(d, exist_ok=True)
+        return d
+    except OSError:
+        return None
+
+
+def _resolve_paths():
+    """각 설정 파일 경로를 결정. 우선순위:
+      1. NMAPPARSER_DATA_DIR 환경변수 (회사 이미지 / 강제 override)
+      2. config.json 의 개별 파일 핀 (options_xlsx / categories_xlsx) — 파일 실존 시
+      3. config.json 의 data_dir
+      4. _app_dir() — 기존 xlsx 가 있거나 쓰기 가능한 경우
+      5. _user_data_dir() — %APPDATA%\\nmapParser 등
+      6. tempfile.gettempdir()/nmapParser — APPDATA 도 막힌 환경
+      7. None (메모리-only 모드 신호)
+    리턴: (data_dir | None, options_xlsx_path | None, categories_xlsx_path | None,
+           memory_only: bool)
+    """
+    # 1) 환경변수 최우선 — 존재하고 쓰기 가능하면 즉시 채택
+    env_dir = os.environ.get("NMAPPARSER_DATA_DIR", "").strip()
+    if env_dir:
+        try:
+            os.makedirs(env_dir, exist_ok=True)
+        except OSError:
+            pass
+        if os.path.isdir(env_dir) and _is_dir_writable(env_dir):
+            return (env_dir,
+                    os.path.join(env_dir, OPTIONS_XLSX_NAME),
+                    os.path.join(env_dir, CATEGORIES_XLSX_NAME),
+                    False)
+
+    cfg = _read_pin_config()
+
+    # 4)→2)→3) 순회로 data_dir 결정
+    pinned_dir = cfg.get("data_dir")
+    data_dir = None
+    if pinned_dir and os.path.isdir(pinned_dir) and _is_dir_writable(pinned_dir):
+        data_dir = pinned_dir
+    else:
+        here = _app_dir()
+        has_existing = (
+            os.path.isfile(os.path.join(here, OPTIONS_XLSX_NAME))
+            or os.path.isfile(os.path.join(here, CATEGORIES_XLSX_NAME))
+        )
+        if has_existing or _is_dir_writable(here):
+            data_dir = here
+        else:
+            udd = _user_data_dir()
+            if udd and _is_dir_writable(udd):
+                data_dir = udd
+            else:
+                tmp = _temp_data_dir()
+                if tmp and _is_dir_writable(tmp):
+                    data_dir = tmp
+
+    if data_dir is None:
+        # 메모리-only 모드 — 모든 디스크 쓰기 불가
+        return (None, None, None, True)
+
+    # 개별 파일 핀 (파일 실존 시에만 적용)
+    pinned_opt = cfg.get("options_xlsx")
+    options_path = (pinned_opt
+                    if (pinned_opt and os.path.isfile(pinned_opt))
+                    else os.path.join(data_dir, OPTIONS_XLSX_NAME))
+
+    pinned_cat = cfg.get("categories_xlsx")
+    categories_path = (pinned_cat
+                       if (pinned_cat and os.path.isfile(pinned_cat))
+                       else os.path.join(data_dir, CATEGORIES_XLSX_NAME))
+
+    return data_dir, options_path, categories_path, False
+
+
+def _resolve_data_dir():
+    """구버전 호환 — _resolve_paths() 의 data_dir 만 반환 (None 일 수도 있음)."""
+    return _resolve_paths()[0]
+
+
 # ============================================================ tooltip
 
 class Tooltip:
@@ -717,23 +1006,52 @@ class NmapParserApp:
         root.geometry(f"{window_w}x{window_h}")
         root.minsize(MIN_W, MIN_H)
 
+        # 사용자 첫 인상: 창 프레임을 즉시 표시.
+        # AV/Defender 가 .exe 를 스캔하느라 spawn 후 UI 까지 수 초 걸려도,
+        # 빈 창이 먼저 떠 있어야 "멈춘 것" 처럼 보이지 않음.
+        try:
+            root.update_idletasks()
+        except Exception:
+            pass
+
         # 1280px 기준 panel 폭 ~620px → 한 cell 200~220px → 3 col 적정
         self.panel_cols = 3
 
-        here = _app_dir()
-        self.options_xlsx_path = os.path.join(here, OPTIONS_XLSX_NAME)
-        self.options_csv_path = os.path.join(here, OPTIONS_CSV_NAME)  # 구버전 호환
-        self.categories_xlsx_path = os.path.join(here, CATEGORIES_XLSX_NAME)
+        # 설정 폴더 / 파일 경로 — 쓰기 가능한 위치 자동 선택 (Program Files / 회사 보안
+        # 디스크 / 네트워크 드라이브 등 read-only 환경 회피). 환경변수
+        # NMAPPARSER_DATA_DIR 가 1순위, 그 다음 config.json 핀, _app_dir(), %APPDATA%,
+        # %TEMP% 순. 모두 실패하면 메모리-only 모드.
+        (self.data_dir, self.options_xlsx_path,
+         self.categories_xlsx_path, self.memory_only) = _resolve_paths()
+        if self.memory_only:
+            # 메모리 모드에선 xlsx 파일 자체가 없음 — 경로는 None 유지하고 GUI 에서 안내.
+            self.options_csv_path = None
+        else:
+            self.options_csv_path = os.path.join(self.data_dir, OPTIONS_CSV_NAME)
         self.categories = {}      # {서비스명_lower: (분류, 설명)}
         self.option_rows = []     # 옵션 파일에서 읽은 행
         self.option_vars = []     # [{"kind", "var", "row", "group"}, ...]
         self.group_vars = {}      # group_name -> StringVar
 
         self.nmap_exe = find_nmap_exe()
-        self.services_table = parse_nmap_services(self.nmap_exe) if self.nmap_exe else {}
+        # services_table 은 CSV 작성 시점에만 필요 — 첫 렌더 차단을 피하려고 지연 로딩.
+        # nmap-services 는 ~22000줄로 콜드 디스크 / AV 실시간 검사 환경에서 100~500ms 가량 걸릴 수 있음.
+        self.services_table = {}
+        self._services_loaded = False
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.output_folder = tk.StringVar(value=os.path.join(here, ts))
+        # 스캔 산출 폴더 기본값:
+        #   1) NMAPPARSER_OUTPUT_DIR 환경변수
+        #   2) data_dir/<timestamp>
+        #   3) data_dir 가 None(메모리 모드) 이면 tempfile.gettempdir()/nmapParser/<ts>
+        env_out = os.environ.get("NMAPPARSER_OUTPUT_DIR", "").strip()
+        if env_out:
+            output_default = os.path.join(env_out, ts)
+        elif self.data_dir:
+            output_default = os.path.join(self.data_dir, ts)
+        else:
+            output_default = os.path.join(tempfile.gettempdir(), "nmapParser", ts)
+        self.output_folder = tk.StringVar(value=output_default)
 
         self.scan_thread = None
         self.proc = None
@@ -756,10 +1074,20 @@ class NmapParserApp:
         self._reload_options(initial=True)
         self._refresh_nmap_button()
 
-    def _make_scrollable_panel(self, parent, title):
+        # 모든 UI 가 그려진 후 services_table 비동기 로딩 — 첫 화면 응답성 우선.
+        # 스캔 결과 CSV 변환 전까지만 채워지면 되므로 100ms 지연이 안전 마진.
+        self.root.after(100, self._lazy_load_services_table)
+
+    def _make_scrollable_panel(self, parent, title, header_widget=None):
         """LabelFrame + 내부 Canvas + Scrollbar + Inner Frame 구조 생성.
+
+        header_widget 가 주어지면 LabelFrame 의 타이틀 자리에 그 위젯을 노출
+        (labelwidget 패턴) — 우측에 버튼/체크박스를 끼워 넣을 때 사용.
         리턴: (outer_frame_to_pack, inner_frame_to_use_as_parent)"""
-        outer = tk.LabelFrame(parent, text=title)
+        if header_widget is not None:
+            outer = tk.LabelFrame(parent, labelwidget=header_widget)
+        else:
+            outer = tk.LabelFrame(parent, text=title)
         canvas = tk.Canvas(outer, borderwidth=0, highlightthickness=0)
         vbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=vbar.set)
@@ -847,12 +1175,30 @@ class NmapParserApp:
         mid = tk.Frame(self.paned)
         self.paned.add(mid, minsize=200, stretch="always", height=320)
 
+        # 기본 패널 — 타이틀 우측에 [✓ UDP 스캔 사용] 마스터 토글 (이슈 6)
+        opts_title = tk.Frame(mid)
+        tk.Label(opts_title, text="기본 스캔 옵션 (options.xlsx 기반)",
+                 font=("Segoe UI", 9, "bold")).pack(side="left", padx=(4, 8))
+        self.udp_section_on = tk.BooleanVar(value=True)
+        tk.Checkbutton(opts_title, text="UDP 스캔 사용",
+                       variable=self.udp_section_on,
+                       command=self._on_udp_toggle).pack(side="left")
         opts_outer, self.opts_frame = self._make_scrollable_panel(
-            mid, "기본 스캔 옵션 (options.xlsx 기반)")
+            mid, "기본 스캔 옵션 (options.xlsx 기반)", header_widget=opts_title)
         opts_outer.pack(side="left", fill="both", expand=True, padx=(0, 4))
 
+        # NSE 패널 — 타이틀 우측에 [✓ 스크립트 사용] + [전부 해제] (이슈 2 + 6)
+        nse_title = tk.Frame(mid)
+        tk.Label(nse_title, text="NSE 식별 스크립트 (options.xlsx 의 --script 행)",
+                 font=("Segoe UI", 9, "bold")).pack(side="left", padx=(4, 8))
+        self.nse_section_on = tk.BooleanVar(value=True)
+        tk.Checkbutton(nse_title, text="스크립트 사용",
+                       variable=self.nse_section_on,
+                       command=self._on_nse_toggle).pack(side="left")
+        tk.Button(nse_title, text="전부 해제",
+                  command=self._deselect_all_nse, padx=4).pack(side="left", padx=(8, 0))
         nse_outer, self.nse_frame = self._make_scrollable_panel(
-            mid, "NSE 식별 스크립트 (options.xlsx 의 --script 행)")
+            mid, "NSE 식별 스크립트 (options.xlsx 의 --script 행)", header_widget=nse_title)
         nse_outer.pack(side="left", fill="both", expand=True, padx=(4, 0))
 
         # paned.pack 은 함수 끝에서 (모든 bottom 위젯 packed 후 잉여 공간 차지하게).
@@ -864,13 +1210,17 @@ class NmapParserApp:
         tk.Button(opt_mgr, text="options.xlsx 열기 (Excel)",
                   command=self._open_options_xlsx).pack(side="left", padx=2)
         tk.Button(opt_mgr, text="options.xlsx 폴더 열기",
-                  command=lambda: subprocess.Popen(["explorer.exe", "/select,", self.options_xlsx_path])).pack(side="left", padx=2)
+                  command=self._open_options_folder).pack(side="left", padx=2)
         # categories 관리
         tk.Button(opt_mgr, text="분류 다시 불러오기",
                   command=lambda: self._reload_categories(initial=False),
                   bg="#e3f2fd").pack(side="left", padx=(12, 2))
         tk.Button(opt_mgr, text="categories.xlsx 열기 (Excel)",
                   command=self._open_categories_xlsx).pack(side="left", padx=2)
+        # 설정 파일 폴더 수동 지정 — 자동 생성이 막힌 경우 / 다른 위치에 둔 xlsx 를 쓰고 싶을 때.
+        tk.Button(opt_mgr, text="설정 폴더 변경...",
+                  command=lambda: self._relocate_config_dir(),
+                  bg="#fce4ec").pack(side="left", padx=(12, 2))
         self.options_status = tk.Label(opt_mgr, text="", fg="#555")
         self.options_status.pack(side="left", padx=12)
 
@@ -888,7 +1238,25 @@ class NmapParserApp:
         nse_row.pack(fill="x", padx=4, pady=2)
         tk.Label(nse_row, text="추가 NSE 스크립트 (콤마 구분, 비우면 미사용):", width=44, anchor="w").pack(side="left")
         self.custom_nse = tk.StringVar(value="")
-        tk.Entry(nse_row, textvariable=self.custom_nse).pack(side="left", fill="x", expand=True)
+        self.custom_nse_entry = tk.Entry(nse_row, textvariable=self.custom_nse)
+        self.custom_nse_entry.pack(side="left", fill="x", expand=True)
+        # custom_ports Entry 도 토글 대상이라 별도 핸들 보관
+        self.custom_ports_entry = port_row.winfo_children()[1]  # 두 번째 자식 = Entry
+
+        # 직접 명령어 override (이슈 7) — 옆 체크박스를 켜야 적용됨.
+        ovr_row = tk.Frame(adv)
+        ovr_row.pack(fill="x", padx=4, pady=2)
+        tk.Label(ovr_row, text="직접 입력 명령 (전체 override):", width=44, anchor="w").pack(side="left")
+        self.override_cmd = tk.StringVar(value="")
+        self.override_cmd_entry = tk.Entry(ovr_row, textvariable=self.override_cmd)
+        self.override_cmd_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.override_active = tk.BooleanVar(value=False)
+        tk.Checkbutton(ovr_row, text="override 사용",
+                       variable=self.override_active,
+                       command=self._on_override_toggle).pack(side="left")
+        tk.Label(adv, fg="#a06000",
+                 text="  ⚠ override ON 시 다른 옵션 모두 무시. 출력 플래그(-oA 등)는 자동 보강.").pack(
+            anchor="w", padx=4, pady=(0, 2))
 
         # 6. CSV 변환
         csv_frame = tk.LabelFrame(self.root, text="결과 CSV 변환")
@@ -897,7 +1265,7 @@ class NmapParserApp:
         tk.Checkbutton(csv_frame, text="CSV 로 변환", variable=self.csv_convert).pack(side="left", padx=6, pady=2)
         tk.Checkbutton(csv_frame, text="open 포트만 CSV 에 포함", variable=self.csv_open_only).pack(side="left", padx=6, pady=2)
         tk.Label(csv_frame, text=
-                 "  CSV 컬럼: IP, PORT, 포트상태, 추측서비스(table), 확인서비스(probed), NSE스크립트명, 스크립트출력",
+                 "  CSV 15컬럼: IP, 호스트, OS, PORT, 프로토콜, 포트상태, 추측/확인서비스, 식별, 분류, 용도, 상세, 비고, NSE스크립트명, 스크립트출력",
                  fg="#555").pack(side="left", padx=4)
 
         # 7. 실행 버튼
@@ -940,6 +1308,18 @@ class NmapParserApp:
 
     # ----------------------------- options.xlsx 로딩 & 동적 패널
     def _reload_options(self, initial=False):
+        # 메모리-only 모드: DEFAULT_OPTIONS 를 직접 로드 (디스크 쓰기 불가 환경)
+        if self.memory_only or not self.options_xlsx_path:
+            self.option_rows = default_options_as_rows()
+            self._rebuild_option_panels()
+            self._apply_dynamic_size()
+            self.options_status.config(
+                text=f"옵션 {len(self.option_rows)}개 로드됨 — 메모리 모드 (디스크 쓰기 불가)")
+            if not initial:
+                self.status_var.set(
+                    f"옵션 다시 불러옴 (메모리 모드, {len(self.option_rows)}개)")
+            return
+
         # 1) xlsx 가 없을 때:
         #    - 구버전 csv 가 있으면 자동 마이그레이션
         #    - 없으면 기본값으로 새 xlsx 생성
@@ -957,8 +1337,11 @@ class NmapParserApp:
                 try:
                     write_default_options_xlsx(self.options_xlsx_path)
                 except OSError as e:
+                    if self._offer_relocation_on_write_failure("options.xlsx", e):
+                        return
                     messagebox.showerror("options.xlsx 생성 실패",
-                        f"기본 옵션 파일을 만들 수 없습니다.\n원인: {e}\n경로: {self.options_xlsx_path}")
+                        f"기본 옵션 파일을 만들 수 없습니다.\n원인: {e}\n경로: {self.options_xlsx_path}\n\n"
+                        "상단의 '설정 폴더 변경' 버튼으로 쓰기 가능한 폴더를 지정할 수 있습니다.")
                     return
 
         rows, errors = load_options_xlsx(self.options_xlsx_path)
@@ -1046,7 +1429,7 @@ class NmapParserApp:
                         self.group_vars[group].set(row["option"])
 
                 rb = tk.Radiobutton(
-                    radio_strip, text=row["label"],
+                    radio_strip, text=_fmt_option_label(row),
                     variable=self.group_vars[group], value=row["option"],
                 )
                 rb.pack(side="left", padx=4)
@@ -1054,7 +1437,7 @@ class NmapParserApp:
                     Tooltip(rb, row["desc"])
                 self.option_vars.append({
                     "kind": "radio", "var": self.group_vars[group],
-                    "row": row, "group": group,
+                    "row": row, "group": group, "widget": rb,
                 })
 
             # 활성=1 없는 그룹은 첫 번째 옵션으로 폴백 (라디오는 항상 1개 선택 상태 보장)
@@ -1070,12 +1453,14 @@ class NmapParserApp:
                 v = tk.BooleanVar(value=row["enabled"])
                 cb_row = next_grid_row + cb_idx // N_COLS
                 cb_col = cb_idx % N_COLS
-                cb = tk.Checkbutton(parent, text=row["label"], variable=v, anchor="w")
+                cb = tk.Checkbutton(parent, text=_fmt_option_label(row),
+                                    variable=v, anchor="w")
                 cb.grid(row=cb_row, column=cb_col, sticky="w", padx=4, pady=1)
                 if row.get("desc"):
                     Tooltip(cb, row["desc"])
                 cb_idx += 1
-                self.option_vars.append({"kind": "checkbox", "var": v, "row": row, "group": ""})
+                self.option_vars.append({"kind": "checkbox", "var": v,
+                                         "row": row, "group": "", "widget": cb})
 
         if duplicate_warnings:
             messagebox.showwarning("그룹 중복 활성화",
@@ -1142,14 +1527,24 @@ class NmapParserApp:
             messagebox.showerror("열기 실패", f"파일을 열 수 없음: {e}\n경로: {self._log_file_path}")
 
     def _reload_categories(self, initial=False):
-        """categories.xlsx 로드. 없으면 기본값으로 자동 생성."""
+        """categories.xlsx 로드. 없으면 기본값으로 자동 생성. 메모리-only 모드면
+        DEFAULT_CATEGORIES 직접 사용."""
+        if self.memory_only or not self.categories_xlsx_path:
+            self.categories = default_categories_as_map()
+            if not initial:
+                self.status_var.set(
+                    f"분류 다시 불러옴 (메모리 모드, {len(self.categories)}개)")
+            return
         if not os.path.isfile(self.categories_xlsx_path):
             try:
                 write_default_categories_xlsx(self.categories_xlsx_path)
             except OSError as e:
                 if not initial:
+                    if self._offer_relocation_on_write_failure("categories.xlsx", e):
+                        return
                     messagebox.showerror("categories.xlsx 생성 실패",
-                        f"분류 파일을 만들 수 없습니다.\n원인: {e}\n경로: {self.categories_xlsx_path}")
+                        f"분류 파일을 만들 수 없습니다.\n원인: {e}\n경로: {self.categories_xlsx_path}\n\n"
+                        "상단의 '설정 폴더 변경' 버튼으로 쓰기 가능한 폴더를 지정할 수 있습니다.")
                 self.categories = {}
                 return
         catmap, errors = load_categories_xlsx(self.categories_xlsx_path)
@@ -1161,10 +1556,18 @@ class NmapParserApp:
             self.status_var.set(f"분류 다시 불러옴 ({len(catmap)}개)")
 
     def _open_categories_xlsx(self):
+        if self.memory_only or not self.categories_xlsx_path:
+            messagebox.showinfo(
+                "메모리 모드",
+                "쓰기 가능한 폴더가 없어 메모리 모드로 동작 중입니다.\n"
+                "'설정 폴더 변경...' 으로 폴더를 직접 지정하세요.")
+            return
         if not os.path.isfile(self.categories_xlsx_path):
             try:
                 write_default_categories_xlsx(self.categories_xlsx_path)
             except OSError as e:
+                if self._offer_relocation_on_write_failure("categories.xlsx", e):
+                    return
                 messagebox.showerror("열기 실패", f"파일을 만들 수 없습니다: {e}")
                 return
         try:
@@ -1183,11 +1586,32 @@ class NmapParserApp:
                     return info.get("category", "미분류"), info.get("usage", "")
         return "미분류", ""
 
+    def _open_options_folder(self):
+        """options.xlsx 폴더 열기 — 메모리 모드 / UNC hang 대비 try/except."""
+        if self.memory_only or not self.options_xlsx_path:
+            messagebox.showinfo(
+                "메모리 모드",
+                "쓰기 가능한 폴더가 없어 메모리 모드로 동작 중입니다.\n"
+                "'설정 폴더 변경...' 으로 폴더를 직접 지정하세요.")
+            return
+        try:
+            subprocess.Popen(["explorer.exe", "/select,", self.options_xlsx_path])
+        except (OSError, FileNotFoundError) as e:
+            messagebox.showerror("폴더 열기 실패", f"{e}\n경로: {self.options_xlsx_path}")
+
     def _open_options_xlsx(self):
+        if self.memory_only or not self.options_xlsx_path:
+            messagebox.showinfo(
+                "메모리 모드",
+                "쓰기 가능한 폴더가 없어 메모리 모드로 동작 중입니다.\n"
+                "'설정 폴더 변경...' 으로 폴더를 직접 지정하세요.")
+            return
         if not os.path.isfile(self.options_xlsx_path):
             try:
                 write_default_options_xlsx(self.options_xlsx_path)
             except OSError as e:
+                if self._offer_relocation_on_write_failure("options.xlsx", e):
+                    return
                 messagebox.showerror("열기 실패", f"파일을 만들 수 없습니다: {e}")
                 return
         try:
@@ -1195,6 +1619,238 @@ class NmapParserApp:
         except OSError as e:
             messagebox.showerror("열기 실패",
                 f"파일 연결 프로그램으로 열 수 없습니다.\n원인: {e}\n경로: {self.options_xlsx_path}")
+
+    # ----------------------------- 섹션 토글 / 전부 해제 / override (이슈 2/6/7)
+    def _set_widgets_state(self, entries, state):
+        """entries 의 각 dict 의 'widget' 을 state ('normal' / 'disabled') 로 변경.
+        체크박스가 disabled 로 전환될 때 var 도 0 으로 초기화 — 명령에 자동 누락.
+        """
+        for e in entries:
+            w = e.get("widget")
+            if w is None:
+                continue
+            try:
+                w.configure(state=state)
+            except tk.TclError:
+                pass
+            if state == "disabled" and e.get("kind") == "checkbox":
+                v = e.get("var")
+                if v is not None:
+                    try:
+                        v.set(False)
+                    except tk.TclError:
+                        pass
+
+    def _nse_entries(self):
+        return [e for e in self.option_vars
+                if (e.get("row") or {}).get("option", "").startswith("--script")]
+
+    def _udp_entries(self):
+        return [e for e in self.option_vars
+                if _is_udp_related((e.get("row") or {}).get("option", ""))]
+
+    def _deselect_all_nse(self):
+        """이슈 2 — NSE 패널 모든 체크박스 해제 (state 는 그대로)."""
+        for e in self._nse_entries():
+            if e.get("kind") == "checkbox":
+                v = e.get("var")
+                if v is not None:
+                    try:
+                        v.set(False)
+                    except tk.TclError:
+                        pass
+        self.status_var.set("NSE 체크박스 전부 해제됨")
+
+    def _on_nse_toggle(self):
+        on = bool(self.nse_section_on.get())
+        self._set_widgets_state(self._nse_entries(), "normal" if on else "disabled")
+        self.status_var.set("스크립트 사용 ON" if on else "스크립트 사용 OFF (NSE 모두 비활성)")
+
+    def _on_udp_toggle(self):
+        on = bool(self.udp_section_on.get())
+        self._set_widgets_state(self._udp_entries(), "normal" if on else "disabled")
+        self.status_var.set("UDP 스캔 ON" if on else "UDP 스캔 OFF")
+
+    def _all_option_widgets(self):
+        return list(self.option_vars)
+
+    def _on_override_toggle(self):
+        on = bool(self.override_active.get())
+        target_state = "disabled" if on else "normal"
+        # 모든 옵션 패널 위젯 + 고급 입력 두 칸 + 섹션 토글 두 칸
+        self._set_widgets_state(self._all_option_widgets(), target_state)
+        for w in (self.custom_ports_entry, self.custom_nse_entry):
+            try:
+                w.configure(state=target_state)
+            except tk.TclError:
+                pass
+        # 섹션 토글 자체는 override 상태일 때 disable 로 (UX 일관성)
+        # 하위 체크박스의 state 가 이미 변경됐으므로 마스터만 잠그면 됨.
+        # (마스터 자체 위젯 핸들이 별도로 저장돼 있지 않아 패스 — 다음 리팩터 후보.)
+        self.status_var.set("override 모드 ON" if on else "override 모드 OFF")
+
+    # ----------------------------- 설정 파일 폴더 변경 (수동 지정 / 수동 생성)
+    def _relocate_config_dir(self, prompt_reason=None):
+        """설정 폴더(`options.xlsx` / `categories.xlsx` 위치) 직접 지정.
+
+        - 쓰기 가능한 폴더만 허용.
+        - 폴더 안에 기존 xlsx 가 있으면 그대로 사용, 없으면 기본값으로 새로 만듦.
+        - 선택 결과는 `_user_data_dir()/config.json` 에 저장 → 다음 실행 시 자동 적용.
+        - 폴더 선택을 취소하거나 실패하면 마지막 수단으로 xlsx 파일 직접 지정 흐름 제안.
+        """
+        title = "설정 파일 폴더 선택 (options.xlsx / categories.xlsx 위치)"
+        if prompt_reason:
+            messagebox.showinfo("설정 폴더 선택 안내",
+                f"{prompt_reason}\n\n다음 창에서 쓰기 가능한 폴더를 직접 선택하세요.\n"
+                "폴더에 기존 xlsx 가 있으면 그대로 사용하고, 없으면 기본값으로 새로 만듭니다.")
+        initial = self.data_dir if os.path.isdir(self.data_dir) else _user_data_dir()
+        folder = filedialog.askdirectory(title=title, initialdir=initial)
+        if not folder:
+            return self._offer_file_direct_fallback("폴더 선택을 취소했습니다.")
+        if not _is_dir_writable(folder):
+            messagebox.showerror("쓰기 불가",
+                f"선택한 폴더에 파일을 쓸 수 없습니다.\n{folder}")
+            return self._offer_file_direct_fallback("선택한 폴더가 쓰기 불가였습니다.")
+
+        new_options = os.path.join(folder, OPTIONS_XLSX_NAME)
+        new_categories = os.path.join(folder, CATEGORIES_XLSX_NAME)
+        new_options_csv = os.path.join(folder, OPTIONS_CSV_NAME)
+
+        try:
+            if not os.path.isfile(new_options) and not os.path.isfile(new_options_csv):
+                write_default_options_xlsx(new_options)
+            if not os.path.isfile(new_categories):
+                write_default_categories_xlsx(new_categories)
+        except OSError as e:
+            messagebox.showerror("기본 파일 생성 실패",
+                f"{folder} 에 기본 xlsx 를 만들 수 없습니다.\n원인: {e}")
+            return self._offer_file_direct_fallback("폴더에 기본 파일 생성이 실패했습니다.")
+
+        self.data_dir = folder
+        self.options_xlsx_path = new_options
+        self.options_csv_path = new_options_csv
+        self.categories_xlsx_path = new_categories
+        self.memory_only = False  # 사용자 폴더 지정 시 디스크 모드로 복귀
+        # config.json 갱신 — 폴더 기반 모드로 통일하기 위해 개별 파일 핀은 비움.
+        cfg = _read_pin_config()
+        cfg["data_dir"] = folder
+        cfg.pop("options_xlsx", None)
+        cfg.pop("categories_xlsx", None)
+        _write_pin_config(cfg)
+
+        # 즉시 재로드
+        self._reload_categories(initial=False)
+        self._reload_options(initial=False)
+        messagebox.showinfo("설정 폴더 변경 완료",
+            f"설정 폴더가 다음으로 변경되었습니다:\n{folder}\n\n다음 실행 시에도 이 위치가 자동으로 사용됩니다.")
+        return True
+
+    def _offer_file_direct_fallback(self, reason):
+        """폴더 기반 변경이 불가/취소된 경우 → xlsx 파일 직접 지정 흐름 제안 (last resort)."""
+        ans = messagebox.askyesno(
+            "xlsx 파일 직접 지정",
+            f"{reason}\n\n"
+            "마지막 방법으로 options.xlsx 와 categories.xlsx 를 각각 직접 지정하시겠습니까?\n"
+            "(파일이 없으면 그 자리에 기본값으로 새로 만듭니다.)")
+        if not ans:
+            return False
+        ok_opt = self._select_xlsx_file_directly("options")
+        ok_cat = self._select_xlsx_file_directly("categories")
+        return ok_opt or ok_cat
+
+    def _select_xlsx_file_directly(self, what):
+        """xlsx 파일 경로 직접 지정 (last-resort).
+
+        what ∈ ('options', 'categories'). 파일이 없으면 그 자리에 기본값 작성.
+        선택은 config.json 에 개별 파일 핀으로 저장 → 다음 실행 시에도 유지.
+        """
+        if what == "options":
+            title = "options.xlsx 파일 지정 (기존 파일 선택 또는 새 파일명 입력)"
+            default_name = OPTIONS_XLSX_NAME
+            writer = write_default_options_xlsx
+        else:
+            title = "categories.xlsx 파일 지정 (기존 파일 선택 또는 새 파일명 입력)"
+            default_name = CATEGORIES_XLSX_NAME
+            writer = write_default_categories_xlsx
+
+        initial_dir = self.data_dir if os.path.isdir(self.data_dir) else _user_data_dir()
+        path = filedialog.asksaveasfilename(
+            title=title,
+            defaultextension=".xlsx",
+            filetypes=[("Excel xlsx", "*.xlsx"), ("모든 파일", "*.*")],
+            initialdir=initial_dir,
+            initialfile=default_name,
+            confirmoverwrite=False,
+        )
+        if not path:
+            return False
+
+        parent = os.path.dirname(os.path.abspath(path))
+        existed = os.path.isfile(path)
+        if not existed:
+            if not _is_dir_writable(parent):
+                messagebox.showerror("쓰기 불가",
+                    f"파일을 만들 폴더에 쓸 수 없습니다.\n{parent}")
+                return False
+            try:
+                writer(path)
+            except OSError as e:
+                messagebox.showerror("생성 실패", f"{path} 를 만들 수 없습니다.\n원인: {e}")
+                return False
+
+        if what == "options":
+            self.options_xlsx_path = path
+        else:
+            self.categories_xlsx_path = path
+        self.memory_only = False  # 파일 직접 지정도 메모리 모드 해제
+
+        cfg = _read_pin_config()
+        cfg[f"{what}_xlsx"] = path
+        _write_pin_config(cfg)
+
+        if what == "options":
+            self._reload_options(initial=False)
+        else:
+            self._reload_categories(initial=False)
+
+        messagebox.showinfo(
+            f"{what}.xlsx 지정 완료",
+            f"{what}.xlsx 경로가 다음으로 설정되었습니다:\n{path}\n\n"
+            f"({'기존 파일 사용' if existed else '기본값으로 새로 생성'} — 다음 실행 시에도 유지)")
+        return True
+
+    def _offer_relocation_on_write_failure(self, what, err):
+        """xlsx 자동 생성/쓰기 실패 시 사용자에게 폴더 변경 제안.
+
+        Returns True 이면 사용자가 폴더 변경에 응했고 처리 완료(호출자는 추가 에러 표시 X).
+        """
+        ans = messagebox.askyesno(
+            f"{what} 생성/쓰기 실패",
+            f"현재 폴더에 파일을 만들 수 없습니다.\n경로: {self.data_dir}\n원인: {err}\n\n"
+            f"쓰기 가능한 다른 폴더를 직접 지정하시겠습니까?\n"
+            f"(취소 후에도 'xlsx 파일 직접 지정' 옵션을 한 번 더 안내합니다.)"
+        )
+        if not ans:
+            # 폴더 변경을 거절해도 마지막 수단으로 파일 직접 지정 제안.
+            return self._offer_file_direct_fallback("폴더 변경을 취소했습니다.")
+        return self._relocate_config_dir(prompt_reason=f"{what} 자동 생성에 실패했습니다.")
+
+    # ----------------------------- nmap-services 지연 로딩
+    def _lazy_load_services_table(self):
+        """첫 렌더 후에 nmap-services 파싱. 이미 로드됐으면 no-op."""
+        if self._services_loaded:
+            return
+        if self.nmap_exe:
+            try:
+                self.services_table = parse_nmap_services(self.nmap_exe)
+            except Exception:
+                self.services_table = {}
+        self._services_loaded = True
+
+    def _ensure_services_table(self):
+        """CSV 변환 등에서 services_table 이 반드시 필요한 시점에 동기 보강."""
+        if not self._services_loaded:
+            self._lazy_load_services_table()
 
     # ----------------------------- nmap detect button
     def _refresh_nmap_button(self):
@@ -1217,7 +1873,10 @@ class NmapParserApp:
                 messagebox.showerror("오류", f"파일이 존재하지 않습니다:\n{path}")
                 return
             self.nmap_exe = path
-            self.services_table = parse_nmap_services(self.nmap_exe)
+            # 사용자가 nmap 을 새로 지정했으므로 services 테이블을 즉시 갱신.
+            self._services_loaded = False
+            self.services_table = {}
+            self.root.after(0, self._lazy_load_services_table)
             self._refresh_nmap_button()
 
     # ----------------------------- output folder
@@ -1470,6 +2129,33 @@ class NmapParserApp:
     def _build_command(self, targets):
         if not self.nmap_exe:
             return None
+
+        # 직접 명령 override (이슈 7) — 옆 체크박스가 켜져 있으면 다른 모든 옵션 무시.
+        if getattr(self, "override_active", None) and self.override_active.get():
+            raw = (self.override_cmd.get() or "").strip()
+            if not raw:
+                messagebox.showerror("override 실패",
+                    "직접 입력 명령이 비어 있습니다.\n예: nmap -sT -p 22,80 192.0.2.10")
+                return None
+            try:
+                tokens = shlex.split(raw, posix=(sys.platform != "win32"))
+            except ValueError as e:
+                messagebox.showerror("override 파싱 실패", f"shlex 파싱 오류: {e}")
+                return None
+            # 사용자가 'nmap' 또는 절대경로 nmap.exe 로 시작했다면 제거 — self.nmap_exe 사용.
+            if tokens:
+                head_l = tokens[0].lower()
+                if (head_l in ("nmap", "nmap.exe")
+                        or head_l.endswith(("\\nmap.exe", "/nmap", "/nmap.exe"))):
+                    tokens = tokens[1:]
+            # 출력 플래그 제거 후 우리 -oA 강제 (CSV 파이프라인 보장).
+            tokens = self.sanitize_output_args(tokens)
+            try:
+                self.output_prefix = self._build_output_prefix(targets or ["custom"])
+            except OSError as e:
+                raise OSError(f"출력 폴더 생성 실패: {e}")
+            return [self.nmap_exe] + tokens + ["-oA", self.output_prefix]
+
         cmd = [self.nmap_exe]
         active_rows = self._gather_active_rows()
         extra_tokens, nse_scripts = self.parse_option_rows_to_tokens(active_rows)
@@ -1615,32 +2301,121 @@ class NmapParserApp:
         self.scan_thread.start()
 
     def _scan_worker(self, cmd):
+        # 한글 Windows 의 nmap.exe 는 콘솔 코드페이지(cp949) 로 출력 → utf-8 강제 시
+        # mojibake. locale.getpreferredencoding(False) 가 그 코드페이지를 반환하므로
+        # 사용. 그래도 누락 바이트는 errors="replace" 로 안전 처리.
+        try:
+            stream_encoding = locale.getpreferredencoding(False) or "utf-8"
+        except Exception:
+            stream_encoding = "utf-8"
+
         try:
             kwargs = dict(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                bufsize=1,
-                universal_newlines=True,
-                encoding="utf-8",
-                errors="replace",
+                bufsize=0,  # binary 모드 + 직접 chunk decode → 즉시 flush
             )
             if sys.platform == "win32":
                 kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+
+            # 진단 prelude: 사용자에게 GUI 가 살아 있음을 알려줌. AV / Defender 가
+            # CreateProcess 단계에서 수 초 hang 되어도 이 라인은 미리 표시됨.
+            self._log_queue.put("[nmapParser] 프로세스 시작 시도 "
+                                "(AV / 보안 정책 검사로 수 초 ~ 수십 초 지연 가능)...\n")
             self.proc = subprocess.Popen(cmd, **kwargs)
-            for line in self.proc.stdout:
-                self._log_queue.put(line)
+            self._log_queue.put(
+                f"[nmapParser] 프로세스 시작됨 (PID {self.proc.pid}). nmap 출력 대기 중...\n")
+
+            # 출력 무응답 watchdog 시작 (5초 / 30초 hint)
+            self._scan_last_output_at = time.monotonic()
+            self._scan_started_at = time.monotonic()
+            self._scan_watchdog_active = True
+            self.root.after(5000, self._scan_watchdog_tick)
+
+            buf = b""
+            while True:
+                try:
+                    chunk = self.proc.stdout.read1(4096)
+                except (OSError, ValueError):
+                    chunk = b""
+                if not chunk:
+                    break
+                self._scan_last_output_at = time.monotonic()
+                buf += chunk
+                # 완전한 라인은 즉시 push. nmap progress bar 의 \r 도 라인 간주.
+                while True:
+                    nl_idx = -1
+                    for sep in (b"\n", b"\r"):
+                        idx = buf.find(sep)
+                        if idx != -1 and (nl_idx == -1 or idx < nl_idx):
+                            nl_idx = idx
+                    if nl_idx == -1:
+                        break
+                    line_bytes = buf[:nl_idx + 1]
+                    buf = buf[nl_idx + 1:]
+                    try:
+                        line_str = line_bytes.decode(stream_encoding, errors="replace")
+                    except Exception:
+                        line_str = line_bytes.decode("utf-8", errors="replace")
+                    self._log_queue.put(line_str)
+                # newline 없는 잔여가 충분히 길면(≥256B) partial flush — 진행 표시.
+                if len(buf) >= 256:
+                    try:
+                        partial = buf.decode(stream_encoding, errors="replace")
+                    except Exception:
+                        partial = buf.decode("utf-8", errors="replace")
+                    self._log_queue.put(partial)
+                    buf = b""
+
+            # 잔여 flush
+            if buf:
+                try:
+                    self._log_queue.put(buf.decode(stream_encoding, errors="replace"))
+                except Exception:
+                    self._log_queue.put(buf.decode("utf-8", errors="replace"))
+
             self.proc.wait()
             rc = self.proc.returncode
+            self._scan_watchdog_active = False
             self.root.after(0, self._scan_done, rc)
         except FileNotFoundError as e:
+            self._scan_watchdog_active = False
             self.root.after(0, self._scan_error,
                 f"nmap 실행 실패 (파일 없음): {e}\n해결: nmap 경로를 다시 지정하세요.")
         except PermissionError as e:
+            self._scan_watchdog_active = False
             self.root.after(0, self._scan_error,
                 f"nmap 실행 권한 없음: {e}\n"
                 "해결: 관리자 권한으로 실행하거나 -sS 대신 -sT 옵션 (CSV의 'TCP Connect 스캔') 사용.")
         except Exception as e:
+            self._scan_watchdog_active = False
             self.root.after(0, self._scan_error, f"예상치 못한 오류: {e}")
+
+    def _scan_watchdog_tick(self):
+        """5초마다 실행 — 무응답 / 비정상 종료 모니터링."""
+        if not getattr(self, "_scan_watchdog_active", False):
+            return
+        proc = self.proc
+        if proc is None:
+            return
+        elapsed_silent = time.monotonic() - self._scan_last_output_at
+        elapsed_total = time.monotonic() - self._scan_started_at
+        rc = proc.poll()
+        if rc is not None:
+            # 비정상 종료 (출력 없이) 의 경우만 안내. 정상 종료는 read 루프 끝에서 처리.
+            if elapsed_silent > 1:
+                self._log_queue.put(
+                    f"[nmapParser] 프로세스 조기 종료 감지 (rc={rc}). "
+                    f"AV/정책 차단 가능성. 명령 / nmap.exe 경로 확인.\n")
+            return
+        if elapsed_silent >= 30:
+            self.status_var.set(
+                f"⚠ nmap 무응답 {int(elapsed_silent)}초 — DNS / 방화벽 / AV / NSE 로딩 가능성")
+        elif elapsed_silent >= 5:
+            self.status_var.set(
+                f"nmap 출력 대기 중 ({int(elapsed_silent)}초 경과 / 총 {int(elapsed_total)}초)")
+        # 다음 tick
+        self.root.after(5000, self._scan_watchdog_tick)
 
     def _append_log(self, line):
         self.log_text.insert("end", line)
@@ -1830,6 +2605,8 @@ class NmapParserApp:
 
     # ----------------------------- CSV 변환 (이전과 동일 로직)
     def _convert_to_csv(self, xml_path):
+        # CSV 작성 시점엔 services 테이블이 반드시 채워져야 함 — 지연 로드 보강.
+        self._ensure_services_table()
         tree = ET.parse(xml_path)
         root = tree.getroot()
         rows = []
@@ -1846,6 +2623,28 @@ class NmapParserApp:
                     if a.get("addrtype") in ("ipv6", "mac"):
                         addr = a.get("addr", "")
                         break
+            # 호스트명 (DNS PTR 또는 nmap 이 받은 사용자 입력 hostname)
+            hostname = ""
+            hostnames_el = host.find("hostnames")
+            if hostnames_el is not None:
+                first_hn = hostnames_el.find("hostname")
+                if first_hn is not None:
+                    hostname = first_hn.get("name", "") or ""
+            # OS — best osmatch (가장 정확도 높은 것), "이름 (정확도%)" 포맷
+            os_str = ""
+            os_el = host.find("os")
+            if os_el is not None:
+                best = None
+                for m in os_el.findall("osmatch"):
+                    try:
+                        acc = int(m.get("accuracy", "0") or "0")
+                    except ValueError:
+                        acc = 0
+                    if best is None or acc > best[1]:
+                        best = (m.get("name", "") or "", acc)
+                if best and best[0]:
+                    os_str = f"{best[0]} ({best[1]}%)" if best[1] else best[0]
+
             ports_el = host.find("ports")
             if ports_el is None:
                 continue
@@ -1890,23 +2689,34 @@ class NmapParserApp:
                 nse_data = [(sc.get("id", "") or "", sc.get("output", "") or "") for sc in scripts]
                 remarks = compute_remarks(detail, nse_data)
 
-                if not scripts:
-                    rows.append([addr, portid, state, guessed, probed_short,
-                                 identification, category, usage, detail, remarks, "", ""])
-                else:
-                    for sid, raw_out in nse_data:
-                        out_oneline = raw_out.replace("\r", " ").replace("\n", " | ")
-                        rows.append([addr, portid, state, guessed, probed_short,
-                                     identification, category, usage, detail, remarks,
-                                     sid, out_oneline])
+                # 한 포트 = 한 행 (이슈 3) — NSE 스크립트가 N 개여도 단일 row.
+                sids_joined = ", ".join(sid for sid, _ in nse_data if sid)
+                output_lines = []
+                for sid, raw in nse_data:
+                    cleaned = (raw or "").replace("\r", " ").replace("\n", " | ")
+                    output_lines.append(f"[{sid}] {cleaned}" if sid else cleaned)
+                output_joined = "\n".join(output_lines)
+
+                rows.append([
+                    addr, hostname, os_str,                     # host-level (이슈 4)
+                    portid, proto,                              # port-level (proto 이슈 4)
+                    state, guessed, probed_short,
+                    identification, category, usage,
+                    detail, remarks,
+                    sids_joined, output_joined,
+                ])
 
         csv_path = (self.output_prefix or "") + ".csv"
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["IP", "PORT", "포트상태",
-                        "추측서비스", "확인서비스(short)", "식별",
-                        "분류", "용도", "상세(제품/버전)", "비고",
-                        "NSE스크립트명", "스크립트출력"])
+            w.writerow([
+                "IP", "호스트", "OS",
+                "PORT", "프로토콜",
+                "포트상태", "추측서비스", "확인서비스(short)",
+                "식별", "분류", "용도",
+                "상세(제품/버전)", "비고",
+                "NSE스크립트명", "스크립트출력",
+            ])
             for r in rows:
                 w.writerow(r)
         return csv_path

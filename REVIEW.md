@@ -48,3 +48,38 @@
 - 현재 상태는 배포 전 "마감 점검 단계"로 판단.
 - 남은 리스크는 구조적 결함보다는 **검증 시나리오 확장과 운영 가이드(민감정보 관리)** 쪽에 가까움.
 
+---
+
+# 추가 보안 점검 (2026-05-07)
+
+## 점검 항목
+1. 해킹 위험
+2. 삽입된 악성 코드
+3. 개인정보
+4. 저작권 이슈
+
+## 결과 요약
+- **악성 코드 / PII / 저작권**: 발견 사항 없음. 표준 라이브러리만 사용, 단일 작성자
+  git 이력 정상, 서드파티 코드 복붙 흔적 없음, MIT 라이선스 일관, xlsx 매크로/외부
+  링크 없음, 하드코딩된 자격증명·내부 IP·이메일 없음.
+- **해킹 위험**: `subprocess.Popen` 은 list 형태 + `shell=True` 미사용으로 안전.
+  타깃·포트·출력 플래그 검증 정상. 두 가지 잔여 리스크에 한해 하드닝 적용:
+
+### 적용된 하드닝
+- `xlsx_io.py:read_xlsx` 에 DOCTYPE/ENTITY 선언 거부 + 압축 해제 크기 가드 추가.
+  사용자가 Excel 로 편집·저장한 `options.xlsx` / `categories.xlsx` 로딩 경로의
+  XML entity expansion (billion-laughs) DoS 와 zip-bomb 을 사전 차단.
+
+### 운영 가이드 (코드 변경 없이 사용자 책임)
+- 스캔 산출물(`.log` / `.xml` / `.csv`)은 대상 자산 정보(IP / 서비스 배너)를
+  포함하므로 공유 디렉터리(공용 네트워크 드라이브, 멀티유저 호스트의
+  world-readable 경로)에 저장하지 말 것. 기본 출력 폴더(앱 디렉터리 하위
+  타임스탬프 폴더)는 OS 기본 umask 를 따르므로 조직 정책에 맞춰 별도 보호 필요.
+- `--script` / `--script-args` / `--datadir` / `-iL` 등 nmap 고급 플래그는
+  의도적으로 허용되어 있음 — GUI 래퍼 본질상 로컬 사용자가 nmap 을 직접
+  사용하는 것과 동일한 권한 모델로 동작.
+
+## 빌드 변경
+- x86 단일 PyInstaller 빌드를 GitHub Actions (`.github/workflows/build-windows-x86.yml`)
+  로 자동화. 결과물 `nmapParser.exe` 는 32/64-bit Windows 모두 WoW64 로 동작.
+

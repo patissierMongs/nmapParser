@@ -11,17 +11,29 @@
 ## 30초 요약
 
 1. **타깃 입력 → ▶ 스캔 시작.** GUI default 가 사용자 점검 표준 (`phase1`) 명령을 그대로 조립합니다.
-2. **결과 CSV 12컬럼.** Excel 로 열어 `분류`/`용도`/`식별` 필터만 걸어도 90% 정리 끝.
+2. **결과 CSV 15컬럼.** 호스트/OS/프로토콜까지 한 행에 — Excel 로 열어 `분류`/`용도`/`식별` 필터만 걸어도 90% 정리 끝.
 3. **옵션은 Excel 로 관리.** `options.xlsx` / `categories.xlsx` 행 추가만 하면 GUI 가 바로 반영.
 
 ![CSV 결과 예시](./screenshot_csv_sample.png)
 
 ## 빠른 시작
 
-**Option A — `.exe` 한 파일 (Python 불필요)**
+**Option A — Windows 실행 파일 (Python 불필요)**
+
+Releases 페이지에 두 가지 형식이 함께 올라옵니다 (둘 다 x86 — 32/64-bit Windows 모두 실행).
+
+| 파일 | 첫 실행 속도 | 배포 편의 | 추천 환경 |
+|---|---|---|---|
+| `nmapParser-x86.zip` (**권장**) | **즉시** | zip 풀기 1회 | AV 가 엄격한 환경, 기업 PC, OneDrive 동기 폴더, 네트워크 드라이브 |
+| `nmapParser.exe` (단일 파일) | 5–30초 (첫 실행만) | 파일 1개 | 개인 PC / 빠른 한 번 사용 |
+
 1. nmap 설치: <https://nmap.org/download.html>
-2. [Releases](https://github.com/patissierMongs/nmapParser/releases/latest) 에서 `nmapParser.exe` 다운로드
-3. 더블클릭. 첫 실행 시 `options.xlsx` / `categories.xlsx` 자동 생성
+2. [Releases](https://github.com/patissierMongs/nmapParser/releases/latest) 에서 위 표의 파일 중 하나 다운로드.
+3. 실행:
+   - zip → 적당한 폴더에 풀고 `nmapParser.exe` 더블클릭.
+   - 단일 .exe → 그대로 더블클릭. 첫 실행 시 PyInstaller 압축 해제 + Defender 스캔 사이에 잠깐 멈춰 보일 수 있음 (정상 — 두 번째 실행부터 즉시 시작).
+4. 첫 실행 시 `options.xlsx` / `categories.xlsx` 자동 생성.
+   - 설치 위치가 read-only(예: `C:\Program Files\…`) 이면 설정 파일은 `%APPDATA%\nmapParser\` 로 자동 fallback. **"설정 폴더 변경..."** 또는 **xlsx 파일 직접 지정** 으로 직접 위치 지정도 가능.
 
 **Option B — 소스에서**
 ```
@@ -39,11 +51,16 @@ python nmapParser.py    # 또는 nmapParser.bat
 - **실시간 로그** (최근 275줄 화면 / 전체는 `.log` 파일) + `--stats-every 1m` 자동 추가로 buffer 멈춤 방지.
 - **창 닫기 시 nmap 자동 종료** (좀비 프로세스 방지).
 
-## CSV 12컬럼
+## CSV 15컬럼
 
 | 컬럼 | 의미 |
 |---|---|
-| IP, PORT, 포트상태 | nmap 기본 |
+| **IP** | 호스트 IP |
+| **호스트** | DNS PTR / 입력 호스트명. `-n` 또는 결과 없으면 빈 값 |
+| **OS** | nmap `-O` osmatch best (`Linux 5.X (95%)` 형태). `-O` 비활성/매칭 실패 시 빈 값 |
+| **PORT** | 포트 번호 |
+| **프로토콜** | `tcp` / `udp` |
+| **포트상태** | `open` / `closed` / `filtered` |
 | **추측서비스** | 포트번호 룩업 (`nmap-services`) |
 | **확인서비스(short)** | XML `<service>@name`. probe 실패 시 `?` |
 | **식별** | `확인` / `추측` / `tcpwrapped` / `미확인` 4값 |
@@ -51,7 +68,8 @@ python nmapParser.py    # 또는 nmapParser.bat
 | **용도** | `관리` / `사용자` / `시스템` / `모니터링` / ... |
 | **상세(제품/버전)** | `OpenSSH 9.6p1 Ubuntu...` 등 verbose |
 | **비고** | 자동 요약 한 줄 — detail + NSE 핵심 (CN, OS, hostname, title) |
-| NSE스크립트명, 스크립트출력 | NSE raw 결과 |
+| **NSE스크립트명** | 적용된 script id 들 (콤마 구분, 한 포트 한 행) |
+| **스크립트출력** | `[id] output` 블록을 줄바꿈으로 누적. Excel "셀 자동 줄바꿈" 켜면 가독 |
 
 > **이 도구는 관찰까지.** 우선순위·노출 평가·권고 같은 판단은 의도적으로 생성하지 않습니다 — 사람의 영역.
 
@@ -109,11 +127,37 @@ nmap -Pn -n -sS -sU -sV --version-all \
 - 라디오 그룹 + 체크박스 grid + 한국어 툴팁
 </details>
 
+## 회사 보안 환경 / 네트워크 드라이브 / AppLocker
+
+폐쇄적 환경에서 막힐 수 있는 지점과 회피 방법:
+
+- **AppLocker / SRP 가 `.exe` 차단**: zip 빌드 안의 `nmapParser.exe` 도 막히면
+  Option B (Python 소스) 로 전환 — `python nmapParser.py` 또는 `nmapParser.bat`.
+- **`%APPDATA%` 가 GPO 로 redirect / read-only**: 앱이 자동으로 `%TEMP%\nmapParser`
+  로 fallback. 그것도 막히면 **메모리-only 모드**로 동작 (옵션 변경은 세션 한정).
+- **수동 위치 강제**: 환경 변수로 GUI 조작 없이 강제 가능.
+  - `NMAPPARSER_DATA_DIR=D:\nmapParser` — 설정 파일 폴더
+  - `NMAPPARSER_OUTPUT_DIR=D:\scans` — 스캔 결과 폴더
+  - `NMAPPARSER_NMAP_EXE=C:\Tools\Nmap\nmap.exe` — nmap 비표준 위치
+- **GUI 에서 직접 변경**: 옵션 관리 줄의 `설정 폴더 변경...` 버튼 — 폴더 픽
+  실패 시 자동으로 xlsx 파일 직접 지정 흐름으로 fallback.
+- **네트워크 드라이브 느림**: 가능하면 zip 을 로컬 SSD 에 풀어 사용 권장.
+
+## 고급 기능
+
+- **NSE 패널 우측 상단**: `[✓ 스크립트 사용]` 마스터 토글, `[전부 해제]` 버튼.
+- **기본 옵션 패널 우측 상단**: `[✓ UDP 스캔 사용]` 토글 — `-sU` / `U:` 포함
+  옵션을 일괄 활성/비활성 (라디오 포함 모든 위젯 disabled).
+- **고급 입력 — `직접 입력 명령 (override)`**: 옆 `override 사용` 체크박스를
+  켜면 **다른 모든 옵션 무시**하고 `nmap -sS ...` 풀 명령어를 그대로 실행.
+  출력 플래그(`-oA` 등)는 자동 제거 후 우리 CSV 파이프라인용 `-oA` 로 보강.
+
 ## 한계
 
-- `-sS` 는 관리자 권한 필요. 일반 사용자는 라디오에서 `Connect` 선택.
+- `-sS` / `-O` 는 관리자 권한 필요. 일반 사용자는 라디오에서 `Connect` 선택.
 - 구버전 nmap 에 없는 NSE 는 nmap 이 무시 또는 경고만.
 - IPv6-only 호스트는 CSV `IP` 컬럼에 IPv6 주소 그대로.
+- override 모드 사용 시 IP 검증 / 옵션 충돌 검사는 동작하지 않음 — 사용자 책임.
 
 ## 라이선스 / 만든 사람
 

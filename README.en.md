@@ -18,10 +18,22 @@
 
 ## Quick start
 
-**Option A — standalone `.exe` (no Python)**
+**Option A — Windows binaries (no Python)**
+
+Two formats ship together on the Releases page (both x86 — run on 32-bit and 64-bit Windows alike).
+
+| File | First-launch speed | Deployment | Best for |
+|---|---|---|---|
+| `nmapParser-x86.zip` (**recommended**) | **instant** | extract once | strict-AV / corporate machines, OneDrive-synced folders, network drives |
+| `nmapParser.exe` (single file) | 5–30s on first run | one file | personal PCs / one-shot use |
+
 1. Install nmap: <https://nmap.org/download.html>
-2. Download `nmapParser.exe` from [Releases](https://github.com/patissierMongs/nmapParser/releases/latest)
-3. Double-click. `options.xlsx` / `categories.xlsx` auto-created on first run.
+2. Grab one of the files above from [Releases](https://github.com/patissierMongs/nmapParser/releases/latest).
+3. Run:
+   - zip → extract to a folder, double-click `nmapParser.exe` inside.
+   - single `.exe` → double-click. First launch may appear frozen for a few seconds while PyInstaller unpacks to `%TEMP%` and Defender scans the binary (normal — subsequent launches are instant).
+4. `options.xlsx` / `categories.xlsx` are auto-created on first run.
+   - If the install location is read-only (e.g., `C:\Program Files\…`) the config files automatically fall back to `%APPDATA%\nmapParser\`. You can also pin a custom folder via **"설정 폴더 변경..."** or pin individual xlsx files directly.
 
 **Option B — from source**
 ```
@@ -39,11 +51,16 @@ python nmapParser.py    # or nmapParser.bat
 - **Live log** (last 275 lines on screen, full output to `.log` file) + auto `--stats-every 1m` to defeat stdout buffering.
 - **Window-close kills nmap** — no zombie processes.
 
-## CSV — 12 columns
+## CSV — 15 columns
 
 | Column | Meaning |
 |---|---|
-| IP, PORT, 포트상태 | nmap basics |
+| **IP** | host IP |
+| **호스트** | DNS PTR / supplied hostname (empty with `-n` or no result) |
+| **OS** | nmap `-O` best osmatch (e.g. `Linux 5.X (95%)`); empty when `-O` off / no match |
+| **PORT** | port number |
+| **프로토콜** | `tcp` / `udp` |
+| **포트상태** | `open` / `closed` / `filtered` |
 | **추측서비스** | port→name lookup (`nmap-services`) |
 | **확인서비스(short)** | XML `<service>@name`. `?` suffix on probe failure |
 | **식별** | `확인` / `추측` / `tcpwrapped` / `미확인` (4 values) |
@@ -51,7 +68,8 @@ python nmapParser.py    # or nmapParser.bat
 | **용도** | `관리` / `사용자` / `시스템` / `모니터링` / ... |
 | **상세(제품/버전)** | verbose — `OpenSSH 9.6p1 Ubuntu...` |
 | **비고** | one-line summary — detail + NSE key (CN, OS, hostname, title) |
-| NSE스크립트명, 스크립트출력 | NSE raw result |
+| **NSE스크립트명** | comma-joined script ids (one row per port) |
+| **스크립트출력** | `[id] output` blocks newline-joined; enable Excel "wrap text" to read |
 
 > **Observation only.** Priority, exposure assessment, recommendations are intentionally not generated — that's the human's call.
 
@@ -109,11 +127,40 @@ nmap -Pn -n -sS -sU -sV --version-all \
 - Radio groups + checkbox grid + Korean tooltips
 </details>
 
+## Locked-down corp / network-drive / AppLocker environments
+
+Workarounds for restrictive setups:
+
+- **AppLocker / SRP blocks `.exe`**: even the zip-extracted `nmapParser.exe` may
+  be blocked. Switch to Option B (Python source) — `python nmapParser.py` or
+  `nmapParser.bat`.
+- **`%APPDATA%` is GPO-redirected / read-only**: app falls back to
+  `%TEMP%\nmapParser`. If that fails too it enters **memory-only mode**
+  (option edits last for the session only).
+- **Force a path via env vars** (no GUI clicks needed):
+  - `NMAPPARSER_DATA_DIR=D:\nmapParser` — config files folder
+  - `NMAPPARSER_OUTPUT_DIR=D:\scans` — scan output folder
+  - `NMAPPARSER_NMAP_EXE=C:\Tools\Nmap\nmap.exe` — non-standard nmap path
+- **GUI override**: option-manager bar → `설정 폴더 변경...` button. Folder
+  picker; if you cancel, it offers a direct xlsx-file picker as last resort.
+- **Slow network drives**: extract the zip to a local SSD when possible.
+
+## Power features
+
+- **NSE panel header**: `[✓ 스크립트 사용]` master toggle, `[전부 해제]` button.
+- **Basic-options panel header**: `[✓ UDP 스캔 사용]` toggle — disables every
+  option containing `-sU` or `U:` ports (including their radios).
+- **Advanced — `직접 입력 명령 (override)`**: tick the `override 사용` box
+  next to the entry and **all other options are bypassed**; your full
+  `nmap -sS ...` line runs verbatim. Output flags (`-oA` etc.) you provide
+  are stripped and re-added to keep the CSV pipeline working.
+
 ## Limits
 
-- `-sS` needs admin. As a normal user, pick the `Connect` radio in `TCP 스캔 타입`.
+- `-sS` / `-O` needs admin. As a normal user, pick the `Connect` radio in `TCP 스캔 타입`.
 - NSE scripts missing in older nmap → nmap warns and skips them.
 - IPv6-only hosts appear in the CSV `IP` column with their IPv6 address.
+- override mode skips IP validation and option-conflict checks — use carefully.
 
 ## License / Author
 
