@@ -18,11 +18,21 @@
 
 ## Quick start
 
-**Option A — standalone `.exe` (no Python)**
+**Option A — Windows binaries (no Python)**
+
+Two formats ship together on the Releases page (both x86 — run on 32-bit and 64-bit Windows alike).
+
+| File | First-launch speed | Deployment | Best for |
+|---|---|---|---|
+| `nmapParser-x86.zip` (**recommended**) | **instant** | extract once | strict-AV / corporate machines, OneDrive-synced folders, network drives |
+| `nmapParser.exe` (single file) | 5–30s on first run | one file | personal PCs / one-shot use |
+
 1. Install nmap: <https://nmap.org/download.html>
-2. Download `nmapParser.exe` from [Releases](https://github.com/patissierMongs/nmapParser/releases/latest) (x86 build — runs on both 32-bit and 64-bit Windows)
-3. Double-click. `options.xlsx` / `categories.xlsx` auto-created on first run.
-   - **First launch can take 5–30 seconds** (PyInstaller unpacks to `%TEMP%` and Windows Defender scans it on first sight). Subsequent launches start instantly. If the window doesn't appear for a while, just wait.
+2. Grab one of the files above from [Releases](https://github.com/patissierMongs/nmapParser/releases/latest).
+3. Run:
+   - zip → extract to a folder, double-click `nmapParser.exe` inside.
+   - single `.exe` → double-click. First launch may appear frozen for a few seconds while PyInstaller unpacks to `%TEMP%` and Defender scans the binary (normal — subsequent launches are instant).
+4. `options.xlsx` / `categories.xlsx` are auto-created on first run.
    - If the install location is read-only (e.g., `C:\Program Files\…`) the config files automatically fall back to `%APPDATA%\nmapParser\`. You can also pin a custom folder via **"설정 폴더 변경..."** or pin individual xlsx files directly.
 
 **Option B — from source**

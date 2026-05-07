@@ -1,7 +1,18 @@
 name: build-windows-x86
 
-# x86(32-bit) PyInstaller onefile 빌드.
-# 결과물은 64-bit Windows 에서도 WoW64 로 그대로 동작 → 단일 .exe 로 통일.
+# x86(32-bit) PyInstaller 빌드 — 두 가지 형식 동시 산출:
+#
+#  1. nmapParser.exe       (onefile)
+#     단일 파일이라 배포가 간편하지만, 첫 실행 시 %TEMP%\_MEIxxx 로 압축
+#     해제하면서 Windows Defender 가 동기 스캔하는 사이 Explorer 가 멈춘 듯
+#     보일 수 있음 (5~30초). 두 번째 실행부터는 즉시 시작.
+#
+#  2. nmapParser-x86.zip   (onedir, 압축)
+#     %TEMP% 압축 해제 단계가 없어서 첫 실행도 즉시 GUI 가 뜸. AV 가 엄격한
+#     기업 환경 / 네트워크 드라이브 / OneDrive 동기 폴더에서도 멈춤 없음.
+#     사용자는 zip 을 풀고 폴더 안 nmapParser.exe 를 실행.
+#
+# 결과물은 모두 32-bit 이라 64-bit Windows 에서도 WoW64 로 그대로 동작.
 
 on:
   workflow_dispatch:
@@ -30,21 +41,32 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pyinstaller
 
+      # --noupx: UPX 압축은 Defender / SmartScreen 휴리스틱 오탐 트리거.
+      # --clean: 이전 빌드 캐시 잔재 제거.
       - name: Build x86 onefile exe
-        # --noupx: UPX 압축은 Windows Defender / SmartScreen 의 휴리스틱
-        #   오탐을 자주 일으켜 첫 실행 시 Explorer 가 멈춘 듯 보이는 원인이 됨.
-        # --clean: 이전 빌드 캐시 잔재 제거.
-        run: pyinstaller --onefile --noconsole --noupx --clean --name nmapParser nmapParser.py
+        run: pyinstaller --onefile --noconsole --noupx --clean --distpath dist-onefile --workpath build-onefile --name nmapParser nmapParser.py
 
-      - name: Upload artifact
+      - name: Build x86 onedir bundle
+        run: pyinstaller --onedir --noconsole --noupx --clean --distpath dist-onedir --workpath build-onedir --name nmapParser nmapParser.py
+
+      - name: Package onedir as zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist-onedir/nmapParser/* -DestinationPath dist-onedir/nmapParser-x86.zip -CompressionLevel Optimal
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: nmapParser-x86
-          path: dist/nmapParser.exe
+          path: |
+            dist-onefile/nmapParser.exe
+            dist-onedir/nmapParser-x86.zip
           if-no-files-found: error
 
-      - name: Publish release asset
+      - name: Publish release assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/nmapParser.exe
+          files: |
+            dist-onefile/nmapParser.exe
+            dist-onedir/nmapParser-x86.zip

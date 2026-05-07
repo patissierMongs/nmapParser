@@ -18,12 +18,22 @@
 
 ## 빠른 시작
 
-**Option A — `.exe` 한 파일 (Python 불필요)**
+**Option A — Windows 실행 파일 (Python 불필요)**
+
+Releases 페이지에 두 가지 형식이 함께 올라옵니다 (둘 다 x86 — 32/64-bit Windows 모두 실행).
+
+| 파일 | 첫 실행 속도 | 배포 편의 | 추천 환경 |
+|---|---|---|---|
+| `nmapParser-x86.zip` (**권장**) | **즉시** | zip 풀기 1회 | AV 가 엄격한 환경, 기업 PC, OneDrive 동기 폴더, 네트워크 드라이브 |
+| `nmapParser.exe` (단일 파일) | 5–30초 (첫 실행만) | 파일 1개 | 개인 PC / 빠른 한 번 사용 |
+
 1. nmap 설치: <https://nmap.org/download.html>
-2. [Releases](https://github.com/patissierMongs/nmapParser/releases/latest) 에서 `nmapParser.exe` 다운로드 (x86 빌드 — 32/64-bit Windows 모두 실행 가능)
-3. 더블클릭. 첫 실행 시 `options.xlsx` / `categories.xlsx` 자동 생성
-   - **첫 실행은 5–30초 정도 걸릴 수 있음** (PyInstaller 압축 해제 + Windows Defender 첫 스캔). 두 번째 실행부터는 즉시 시작됨. 화면이 한참 뜨지 않으면 잠시 기다리세요.
-   - 설치 위치가 read-only(예: `C:\Program Files\…`) 이면 설정 파일은 `%APPDATA%\nmapParser\` 로 자동 fallback. 또는 **"설정 폴더 변경..."** / **xlsx 파일 직접 지정** 으로 위치 직접 지정 가능.
+2. [Releases](https://github.com/patissierMongs/nmapParser/releases/latest) 에서 위 표의 파일 중 하나 다운로드.
+3. 실행:
+   - zip → 적당한 폴더에 풀고 `nmapParser.exe` 더블클릭.
+   - 단일 .exe → 그대로 더블클릭. 첫 실행 시 PyInstaller 압축 해제 + Defender 스캔 사이에 잠깐 멈춰 보일 수 있음 (정상 — 두 번째 실행부터 즉시 시작).
+4. 첫 실행 시 `options.xlsx` / `categories.xlsx` 자동 생성.
+   - 설치 위치가 read-only(예: `C:\Program Files\…`) 이면 설정 파일은 `%APPDATA%\nmapParser\` 로 자동 fallback. **"설정 폴더 변경..."** 또는 **xlsx 파일 직접 지정** 으로 직접 위치 지정도 가능.
 
 **Option B — 소스에서**
 ```

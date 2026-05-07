@@ -851,6 +851,14 @@ class NmapParserApp:
         root.geometry(f"{window_w}x{window_h}")
         root.minsize(MIN_W, MIN_H)
 
+        # 사용자 첫 인상: 창 프레임을 즉시 표시.
+        # AV/Defender 가 .exe 를 스캔하느라 spawn 후 UI 까지 수 초 걸려도,
+        # 빈 창이 먼저 떠 있어야 "멈춘 것" 처럼 보이지 않음.
+        try:
+            root.update_idletasks()
+        except Exception:
+            pass
+
         # 1280px 기준 panel 폭 ~620px → 한 cell 200~220px → 3 col 적정
         self.panel_cols = 3
 
@@ -864,7 +872,10 @@ class NmapParserApp:
         self.group_vars = {}      # group_name -> StringVar
 
         self.nmap_exe = find_nmap_exe()
-        self.services_table = parse_nmap_services(self.nmap_exe) if self.nmap_exe else {}
+        # services_table 은 CSV 작성 시점에만 필요 — 첫 렌더 차단을 피하려고 지연 로딩.
+        # nmap-services 는 ~22000줄로 콜드 디스크 / AV 실시간 검사 환경에서 100~500ms 가량 걸릴 수 있음.
+        self.services_table = {}
+        self._services_loaded = False
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         # 스캔 산출 폴더 기본값 — 쓰기 가능한 data_dir 하위 타임스탬프 폴더.
@@ -891,6 +902,10 @@ class NmapParserApp:
         self._reload_categories(initial=True)
         self._reload_options(initial=True)
         self._refresh_nmap_button()
+
+        # 모든 UI 가 그려진 후 services_table 비동기 로딩 — 첫 화면 응답성 우선.
+        # 스캔 결과 CSV 변환 전까지만 채워지면 되므로 100ms 지연이 안전 마진.
+        self.root.after(100, self._lazy_load_services_table)
 
     def _make_scrollable_panel(self, parent, title):
         """LabelFrame + 내부 Canvas + Scrollbar + Inner Frame 구조 생성.
@@ -1490,6 +1505,23 @@ class NmapParserApp:
             return self._offer_file_direct_fallback("폴더 변경을 취소했습니다.")
         return self._relocate_config_dir(prompt_reason=f"{what} 자동 생성에 실패했습니다.")
 
+    # ----------------------------- nmap-services 지연 로딩
+    def _lazy_load_services_table(self):
+        """첫 렌더 후에 nmap-services 파싱. 이미 로드됐으면 no-op."""
+        if self._services_loaded:
+            return
+        if self.nmap_exe:
+            try:
+                self.services_table = parse_nmap_services(self.nmap_exe)
+            except Exception:
+                self.services_table = {}
+        self._services_loaded = True
+
+    def _ensure_services_table(self):
+        """CSV 변환 등에서 services_table 이 반드시 필요한 시점에 동기 보강."""
+        if not self._services_loaded:
+            self._lazy_load_services_table()
+
     # ----------------------------- nmap detect button
     def _refresh_nmap_button(self):
         if self.nmap_exe and os.path.isfile(self.nmap_exe):
@@ -1511,7 +1543,10 @@ class NmapParserApp:
                 messagebox.showerror("오류", f"파일이 존재하지 않습니다:\n{path}")
                 return
             self.nmap_exe = path
-            self.services_table = parse_nmap_services(self.nmap_exe)
+            # 사용자가 nmap 을 새로 지정했으므로 services 테이블을 즉시 갱신.
+            self._services_loaded = False
+            self.services_table = {}
+            self.root.after(0, self._lazy_load_services_table)
             self._refresh_nmap_button()
 
     # ----------------------------- output folder
@@ -2124,6 +2159,8 @@ class NmapParserApp:
 
     # ----------------------------- CSV 변환 (이전과 동일 로직)
     def _convert_to_csv(self, xml_path):
+        # CSV 작성 시점엔 services 테이블이 반드시 채워져야 함 — 지연 로드 보강.
+        self._ensure_services_table()
         tree = ET.parse(xml_path)
         root = tree.getroot()
         rows = []
