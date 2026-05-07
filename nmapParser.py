@@ -2813,10 +2813,13 @@ class NmapParserApp:
             self.root.after(5000, self._scan_watchdog_tick)
 
             buf = b""
+            # bufsize=0 (unbuffered) 경로에서 stdout 이 RawIOBase 라 read1() 메서드가 없을 수 있음.
+            # 안전하게 read1 우선, 없으면 read 폴백.
+            reader = getattr(self.proc.stdout, "read1", None) or self.proc.stdout.read
             while True:
                 try:
-                    chunk = self.proc.stdout.read1(4096)
-                except (OSError, ValueError):
+                    chunk = reader(4096)
+                except (OSError, ValueError, AttributeError):
                     chunk = b""
                 if not chunk:
                     break
