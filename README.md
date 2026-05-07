@@ -22,6 +22,8 @@
 1. nmap 설치: <https://nmap.org/download.html>
 2. [Releases](https://github.com/patissierMongs/nmapParser/releases/latest) 에서 `nmapParser.exe` 다운로드 (x86 빌드 — 32/64-bit Windows 모두 실행 가능)
 3. 더블클릭. 첫 실행 시 `options.xlsx` / `categories.xlsx` 자동 생성
+   - **첫 실행은 5–30초 정도 걸릴 수 있음** (PyInstaller 압축 해제 + Windows Defender 첫 스캔). 두 번째 실행부터는 즉시 시작됨. 화면이 한참 뜨지 않으면 잠시 기다리세요.
+   - 설치 위치가 read-only(예: `C:\Program Files\…`) 이면 설정 파일은 `%APPDATA%\nmapParser\` 로 자동 fallback. 또는 **"설정 폴더 변경..."** / **xlsx 파일 직접 지정** 으로 위치 직접 지정 가능.
 
 **Option B — 소스에서**
 ```

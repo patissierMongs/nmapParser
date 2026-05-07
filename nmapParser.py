@@ -662,52 +662,104 @@ def _is_dir_writable(path):
         return False
 
 
-_DATA_DIR_PIN_NAME = "data_dir.txt"
+_DATA_DIR_PIN_NAME = "data_dir.txt"      # 구버전 호환 (단일 폴더만 저장)
+_CONFIG_JSON_NAME = "config.json"        # {data_dir, options_xlsx, categories_xlsx}
 
 
-def _read_pinned_data_dir():
-    """사용자가 명시적으로 고른 설정 폴더를 user_data_dir 의 data_dir.txt 에서 읽음."""
+def _read_pin_config():
+    """user_data_dir 의 config.json 을 읽음.
+    구버전 data_dir.txt 만 있을 경우엔 {"data_dir": ...} 로 변환 반환.
+    """
+    udd = _user_data_dir()
+    cfg = {}
     try:
-        p = os.path.join(_user_data_dir(), _DATA_DIR_PIN_NAME)
+        p = os.path.join(udd, _CONFIG_JSON_NAME)
         if os.path.isfile(p):
+            import json
             with open(p, "r", encoding="utf-8") as f:
-                d = f.read().strip()
-            if d and os.path.isdir(d):
-                return d
-    except OSError:
-        pass
-    return None
+                obj = json.load(f)
+            if isinstance(obj, dict):
+                cfg = obj
+    except (OSError, ValueError):
+        cfg = {}
+    if not cfg:
+        # 구버전 data_dir.txt 폴백
+        try:
+            old = os.path.join(udd, _DATA_DIR_PIN_NAME)
+            if os.path.isfile(old):
+                with open(old, "r", encoding="utf-8") as f:
+                    d = f.read().strip()
+                if d:
+                    cfg = {"data_dir": d}
+        except OSError:
+            pass
+    return cfg
 
 
-def _write_pinned_data_dir(path):
-    """사용자가 고른 설정 폴더를 user_data_dir 에 기록. 실패해도 조용히 넘어감."""
+def _write_pin_config(cfg):
+    """config.json 에 기록. 실패해도 조용히 넘어감."""
     try:
-        p = os.path.join(_user_data_dir(), _DATA_DIR_PIN_NAME)
+        import json
+        p = os.path.join(_user_data_dir(), _CONFIG_JSON_NAME)
         with open(p, "w", encoding="utf-8") as f:
-            f.write(path or "")
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
         return True
     except OSError:
         return False
 
 
-def _resolve_data_dir():
-    """options.xlsx / categories.xlsx 이 살 폴더 결정.
-    우선순위:
-      1. 사용자가 명시적으로 고정한 경로 (user_data_dir/data_dir.txt)
-      2. _app_dir() — 기존 xlsx 가 있거나 쓰기 가능한 경우
-      3. _user_data_dir() — 앱 폴더가 read-only(Program Files 등)일 때 자동 fallback
+def _read_pinned_data_dir():
+    """구버전 호환 — 새 코드는 _read_pin_config() 사용 권장."""
+    return _read_pin_config().get("data_dir") or None
+
+
+def _write_pinned_data_dir(path):
+    """구버전 호환 — config.json 의 data_dir 항목을 갱신."""
+    cfg = _read_pin_config()
+    cfg["data_dir"] = path or ""
+    return _write_pin_config(cfg)
+
+
+def _resolve_paths():
+    """각 설정 파일 경로를 결정. 우선순위:
+      1. config.json 의 개별 파일 핀 (options_xlsx / categories_xlsx) — 파일이 실존할 때만
+      2. config.json 의 data_dir
+      3. _app_dir() — 기존 xlsx 가 있거나 쓰기 가능한 경우
+      4. _user_data_dir() — 모두 실패 시 fallback (항상 쓰기 가능)
+    리턴: (data_dir, options_xlsx_path, categories_xlsx_path)
     """
-    pinned = _read_pinned_data_dir()
-    if pinned:
-        return pinned
-    here = _app_dir()
-    has_existing = (
-        os.path.isfile(os.path.join(here, OPTIONS_XLSX_NAME))
-        or os.path.isfile(os.path.join(here, CATEGORIES_XLSX_NAME))
-    )
-    if has_existing or _is_dir_writable(here):
-        return here
-    return _user_data_dir()
+    cfg = _read_pin_config()
+
+    pinned_dir = cfg.get("data_dir")
+    if pinned_dir and os.path.isdir(pinned_dir):
+        data_dir = pinned_dir
+    else:
+        here = _app_dir()
+        has_existing = (
+            os.path.isfile(os.path.join(here, OPTIONS_XLSX_NAME))
+            or os.path.isfile(os.path.join(here, CATEGORIES_XLSX_NAME))
+        )
+        if has_existing or _is_dir_writable(here):
+            data_dir = here
+        else:
+            data_dir = _user_data_dir()
+
+    pinned_opt = cfg.get("options_xlsx")
+    options_path = (pinned_opt
+                    if (pinned_opt and os.path.isfile(pinned_opt))
+                    else os.path.join(data_dir, OPTIONS_XLSX_NAME))
+
+    pinned_cat = cfg.get("categories_xlsx")
+    categories_path = (pinned_cat
+                       if (pinned_cat and os.path.isfile(pinned_cat))
+                       else os.path.join(data_dir, CATEGORIES_XLSX_NAME))
+
+    return data_dir, options_path, categories_path
+
+
+def _resolve_data_dir():
+    """구버전 호환 — _resolve_paths() 의 data_dir 만 반환."""
+    return _resolve_paths()[0]
 
 
 # ============================================================ tooltip
@@ -802,12 +854,10 @@ class NmapParserApp:
         # 1280px 기준 panel 폭 ~620px → 한 cell 200~220px → 3 col 적정
         self.panel_cols = 3
 
-        # 설정 폴더 — 쓰기 가능한 위치 자동 선택 (Program Files 같은 read-only 회피).
-        # 사용자가 '설정 폴더 변경' 으로 고른 경로가 있으면 그걸 우선.
-        self.data_dir = _resolve_data_dir()
-        self.options_xlsx_path = os.path.join(self.data_dir, OPTIONS_XLSX_NAME)
+        # 설정 폴더 / 파일 경로 — 쓰기 가능한 위치 자동 선택 (Program Files 같은 read-only 회피).
+        # 사용자가 '설정 폴더 변경' / 'xlsx 직접 지정' 으로 고른 경로가 있으면 그걸 우선.
+        self.data_dir, self.options_xlsx_path, self.categories_xlsx_path = _resolve_paths()
         self.options_csv_path = os.path.join(self.data_dir, OPTIONS_CSV_NAME)  # 구버전 호환
-        self.categories_xlsx_path = os.path.join(self.data_dir, CATEGORIES_XLSX_NAME)
         self.categories = {}      # {서비스명_lower: (분류, 설명)}
         self.option_rows = []     # 옵션 파일에서 읽은 행
         self.option_vars = []     # [{"kind", "var", "row", "group"}, ...]
@@ -1302,7 +1352,8 @@ class NmapParserApp:
 
         - 쓰기 가능한 폴더만 허용.
         - 폴더 안에 기존 xlsx 가 있으면 그대로 사용, 없으면 기본값으로 새로 만듦.
-        - 선택 결과는 `_user_data_dir()/data_dir.txt` 에 저장 → 다음 실행 시 자동 적용.
+        - 선택 결과는 `_user_data_dir()/config.json` 에 저장 → 다음 실행 시 자동 적용.
+        - 폴더 선택을 취소하거나 실패하면 마지막 수단으로 xlsx 파일 직접 지정 흐름 제안.
         """
         title = "설정 파일 폴더 선택 (options.xlsx / categories.xlsx 위치)"
         if prompt_reason:
@@ -1312,11 +1363,11 @@ class NmapParserApp:
         initial = self.data_dir if os.path.isdir(self.data_dir) else _user_data_dir()
         folder = filedialog.askdirectory(title=title, initialdir=initial)
         if not folder:
-            return False
+            return self._offer_file_direct_fallback("폴더 선택을 취소했습니다.")
         if not _is_dir_writable(folder):
             messagebox.showerror("쓰기 불가",
-                f"선택한 폴더에 파일을 쓸 수 없습니다.\n{folder}\n\n다른 폴더를 선택하세요.")
-            return False
+                f"선택한 폴더에 파일을 쓸 수 없습니다.\n{folder}")
+            return self._offer_file_direct_fallback("선택한 폴더가 쓰기 불가였습니다.")
 
         new_options = os.path.join(folder, OPTIONS_XLSX_NAME)
         new_categories = os.path.join(folder, CATEGORIES_XLSX_NAME)
@@ -1330,19 +1381,97 @@ class NmapParserApp:
         except OSError as e:
             messagebox.showerror("기본 파일 생성 실패",
                 f"{folder} 에 기본 xlsx 를 만들 수 없습니다.\n원인: {e}")
-            return False
+            return self._offer_file_direct_fallback("폴더에 기본 파일 생성이 실패했습니다.")
 
         self.data_dir = folder
         self.options_xlsx_path = new_options
         self.options_csv_path = new_options_csv
         self.categories_xlsx_path = new_categories
-        _write_pinned_data_dir(folder)
+        # config.json 갱신 — 폴더 기반 모드로 통일하기 위해 개별 파일 핀은 비움.
+        cfg = _read_pin_config()
+        cfg["data_dir"] = folder
+        cfg.pop("options_xlsx", None)
+        cfg.pop("categories_xlsx", None)
+        _write_pin_config(cfg)
 
         # 즉시 재로드
         self._reload_categories(initial=False)
         self._reload_options(initial=False)
         messagebox.showinfo("설정 폴더 변경 완료",
             f"설정 폴더가 다음으로 변경되었습니다:\n{folder}\n\n다음 실행 시에도 이 위치가 자동으로 사용됩니다.")
+        return True
+
+    def _offer_file_direct_fallback(self, reason):
+        """폴더 기반 변경이 불가/취소된 경우 → xlsx 파일 직접 지정 흐름 제안 (last resort)."""
+        ans = messagebox.askyesno(
+            "xlsx 파일 직접 지정",
+            f"{reason}\n\n"
+            "마지막 방법으로 options.xlsx 와 categories.xlsx 를 각각 직접 지정하시겠습니까?\n"
+            "(파일이 없으면 그 자리에 기본값으로 새로 만듭니다.)")
+        if not ans:
+            return False
+        ok_opt = self._select_xlsx_file_directly("options")
+        ok_cat = self._select_xlsx_file_directly("categories")
+        return ok_opt or ok_cat
+
+    def _select_xlsx_file_directly(self, what):
+        """xlsx 파일 경로 직접 지정 (last-resort).
+
+        what ∈ ('options', 'categories'). 파일이 없으면 그 자리에 기본값 작성.
+        선택은 config.json 에 개별 파일 핀으로 저장 → 다음 실행 시에도 유지.
+        """
+        if what == "options":
+            title = "options.xlsx 파일 지정 (기존 파일 선택 또는 새 파일명 입력)"
+            default_name = OPTIONS_XLSX_NAME
+            writer = write_default_options_xlsx
+        else:
+            title = "categories.xlsx 파일 지정 (기존 파일 선택 또는 새 파일명 입력)"
+            default_name = CATEGORIES_XLSX_NAME
+            writer = write_default_categories_xlsx
+
+        initial_dir = self.data_dir if os.path.isdir(self.data_dir) else _user_data_dir()
+        path = filedialog.asksaveasfilename(
+            title=title,
+            defaultextension=".xlsx",
+            filetypes=[("Excel xlsx", "*.xlsx"), ("모든 파일", "*.*")],
+            initialdir=initial_dir,
+            initialfile=default_name,
+            confirmoverwrite=False,
+        )
+        if not path:
+            return False
+
+        parent = os.path.dirname(os.path.abspath(path))
+        existed = os.path.isfile(path)
+        if not existed:
+            if not _is_dir_writable(parent):
+                messagebox.showerror("쓰기 불가",
+                    f"파일을 만들 폴더에 쓸 수 없습니다.\n{parent}")
+                return False
+            try:
+                writer(path)
+            except OSError as e:
+                messagebox.showerror("생성 실패", f"{path} 를 만들 수 없습니다.\n원인: {e}")
+                return False
+
+        if what == "options":
+            self.options_xlsx_path = path
+        else:
+            self.categories_xlsx_path = path
+
+        cfg = _read_pin_config()
+        cfg[f"{what}_xlsx"] = path
+        _write_pin_config(cfg)
+
+        if what == "options":
+            self._reload_options(initial=False)
+        else:
+            self._reload_categories(initial=False)
+
+        messagebox.showinfo(
+            f"{what}.xlsx 지정 완료",
+            f"{what}.xlsx 경로가 다음으로 설정되었습니다:\n{path}\n\n"
+            f"({'기존 파일 사용' if existed else '기본값으로 새로 생성'} — 다음 실행 시에도 유지)")
         return True
 
     def _offer_relocation_on_write_failure(self, what, err):
@@ -1354,10 +1483,11 @@ class NmapParserApp:
             f"{what} 생성/쓰기 실패",
             f"현재 폴더에 파일을 만들 수 없습니다.\n경로: {self.data_dir}\n원인: {err}\n\n"
             f"쓰기 가능한 다른 폴더를 직접 지정하시겠습니까?\n"
-            f"(취소하면 작업이 중단됩니다.)"
+            f"(취소 후에도 'xlsx 파일 직접 지정' 옵션을 한 번 더 안내합니다.)"
         )
         if not ans:
-            return False
+            # 폴더 변경을 거절해도 마지막 수단으로 파일 직접 지정 제안.
+            return self._offer_file_direct_fallback("폴더 변경을 취소했습니다.")
         return self._relocate_config_dir(prompt_reason=f"{what} 자동 생성에 실패했습니다.")
 
     # ----------------------------- nmap detect button

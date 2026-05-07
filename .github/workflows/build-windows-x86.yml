@@ -31,7 +31,10 @@ jobs:
           python -m pip install pyinstaller
 
       - name: Build x86 onefile exe
-        run: pyinstaller --onefile --noconsole --name nmapParser nmapParser.py
+        # --noupx: UPX 압축은 Windows Defender / SmartScreen 의 휴리스틱
+        #   오탐을 자주 일으켜 첫 실행 시 Explorer 가 멈춘 듯 보이는 원인이 됨.
+        # --clean: 이전 빌드 캐시 잔재 제거.
+        run: pyinstaller --onefile --noconsole --noupx --clean --name nmapParser nmapParser.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
