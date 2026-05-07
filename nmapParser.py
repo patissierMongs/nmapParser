@@ -984,6 +984,10 @@ def parse_nmap_services(nmap_exe_path):
     return {k: v[0] for k, v in table.items()}
 
 
+# tk Text 위젯에 BEL 들어가면 Windows system sound 재생 — log 출력 전 strip.
+_LOG_CTRL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
 def _quote_win(s):
     """Windows cmd 스타일 인용 (공백/특수문자 포함 시)."""
     if s and not re.search(r"[\s\"<>|&^]", s):
@@ -3337,6 +3341,9 @@ class NmapParserApp:
         self.root.after(5000, self._scan_watchdog_tick)
 
     def _append_log(self, line):
+        # BEL / 기타 invalid control char 제거 — tk system sound 폭주 방지.
+        if line:
+            line = _LOG_CTRL_CHAR_RE.sub("", line)
         self.log_text.insert("end", line)
         self.log_text.see("end")
         # 전체 로그 파일에도 동시에 기록 (디스크에 풀 로그 보존)
@@ -3366,6 +3373,11 @@ class NmapParserApp:
         if not lines:
             return
         merged = "".join(lines)
+        # tk Text 위젯이 ASCII BEL (\x07) 을 만나면 Windows system sound 를 재생.
+        # nmap progress bar / NSE 출력에 가끔 들어와 "지속적 알림음, 창은 안 뜸" 증상.
+        # 다른 invalid control char (\x00-\x06, \x0b, \x0c, \x0e-\x1f) 도 안전하게 제거.
+        # 허용: \t (\x09), \n (\x0a), \r (\x0d).
+        merged = _LOG_CTRL_CHAR_RE.sub("", merged)
         self.log_text.insert("end", merged)
         self.log_text.see("end")
         if self._log_file:
