@@ -21,6 +21,9 @@ nmapParser - 비기술 사용자용 nmap GUI (Windows, Python 표준 라이브�
 """
 
 import os
+import argparse
+import glob
+import hashlib
 import re
 import sys
 import csv
@@ -179,6 +182,65 @@ DEFAULT_CATEGORIES = [
     ("nessus", "보안도구", "보안", "Nessus"),
 ]
 
+# 서비스 노출 위험/공격 표면 가이드(최소 baseline) — categories.xlsx 의 5/6열 값이 비어있을 때 폴백.
+SERVICE_EXPOSURE_GUIDE = {
+    "chargen": ("증폭/반사 DDoS 악용 가능", "UDP 반사/증폭"),
+    "ftp": ("평문 인증/익명 업로드/취약 구현", "무차별 대입, 디렉터리 열람, 업로드 악용"),
+    "ssh": ("약한 계정/구버전 취약점", "브루트포스, 취약 버전 RCE"),
+    "telnet": ("평문 계정 탈취", "도청, 세션 하이재킹"),
+    "smtp": ("오픈 릴레이/메일 위변조", "스팸 릴레이, 사용자 열거"),
+    "domain": ("내부 DNS 정보 노출", "zone transfer, 증폭"),
+    "dns": ("내부 DNS 정보 노출", "zone transfer, 증폭"),
+    "tftp": ("인증 없는 파일 읽기/쓰기", "설정파일 탈취/변조"),
+    "http": ("웹 취약점 직접 노출", "OWASP Top10, 관리자 페이지 노출"),
+    "https": ("웹 취약점 + TLS 설정 미흡", "웹 취약점, 약한 암호군/인증서 오남용"),
+    "rpcbind": ("내부 RPC 서비스 매핑 노출", "서비스 열거 후 측면이동"),
+    "ntp": ("증폭/시간 오염", "NTP 증폭, 시간 동기화 교란"),
+    "microsoft-ds": ("파일공유/인증 경계 노출", "SMB 취약점, null session, relay"),
+    "snmp": ("커뮤니티 문자열 기반 정보 유출", "장비 정보 수집/설정 조회"),
+    "irc": ("레거시 C2/봇넷 채널 악용 가능", "원격 제어 채널 악용"),
+    "cldap": ("디렉터리 정보 노출", "AD 정보 수집, 반사 트래픽 악용"),
+    "rlogin": ("신뢰관계/평문 인증 의존", "신뢰호스트 위조, 계정 탈취"),
+    "shell": ("원격 셸 직접 노출", "rsh 명령 실행 악용"),
+    "lpd": ("인증 없는 인쇄 큐 접근", "출력물 유출/서비스 거부"),
+    "ajp13": ("백엔드 웹 커넥터 직접 노출", "Ghostcat류 파일 읽기/요청 위조"),
+    "http-proxy": ("오픈 프록시 악용", "우회 접속, 익명 프록시 남용"),
+    "echo": ("반사 트래픽/진단용 오용", "반사/증폭 보조"),
+    "ipsec-nat-t": ("VPN 게이트웨이 표면 노출", "IKE 설정 약점 탐색"),
+    "syslog": ("로그 평문 유출/위조", "로그 인젝션/민감정보 유출"),
+    "sip": ("VoIP 인프라 악용", "통화 도청/요금 사기/사용자 열거"),
+    "rdp": ("원격 데스크톱 직접 노출", "브루트포스, 취약점 악용"),
+    "vnc": ("원격 화면 직접 노출", "약한 인증/세션 탈취"),
+    "vmrdp": ("가상화 관리 채널 노출", "관리 세션 탈취"),
+    "postgresql": ("DB 직접 노출", "계정 탈취/SQL 악용"),
+    "mysql": ("DB 직접 노출", "계정 탈취/SQL 악용"),
+    "postgres": ("DB 직접 노출", "계정 탈취/SQL 악용"),
+    "mariadb": ("DB 직접 노출", "계정 탈취/SQL 악용"),
+    "ms-sql-s": ("DB 직접 노출", "계정 탈취/SQL 악용"),
+    "oracle-tns": ("DB 직접 노출", "계정 탈취/SQL 악용"),
+    "mongodb": ("DB 직접 노출", "계정 탈취/NoSQL 악용"),
+    "redis": ("DB 직접 노출", "무인증 접근/데이터 변조"),
+    "db2": ("DB 직접 노출", "계정 탈취/SQL 악용"),
+    "ajp": ("백엔드 웹 커넥터 직접 노출", "파일 읽기/요청 위조"),
+    "https-alt": ("웹 취약점 + TLS 설정 미흡", "웹 취약점, 약한 암호군/인증서 오남용"),
+    "http-alt": ("웹 취약점 직접 노출", "OWASP Top10, 관리자 페이지 노출"),
+    "vnc-http": ("원격 화면 직접 노출", "약한 인증/세션 탈취"),
+    "msrpc": ("내부 원격 프로시저 표면 노출", "서비스 열거/취약점 악용"),
+    "netbios-ssn": ("파일공유/인증 경계 노출", "SMB/NetBIOS 취약점 악용"),
+    "snmptrap": ("모니터링 이벤트 평문 노출", "장비/이벤트 정보 수집"),
+    "isakmp": ("VPN 게이트웨이 표면 노출", "IKE 설정 약점 탐색"),
+    "webpush": ("웹 푸시 엔드포인트 노출", "푸시 채널 오남용/스팸"),
+    "ipcserver": ("내부 IPC 서비스 직접 노출", "권한상승/측면이동 발판"),
+    "cadlock2": ("제어/잠금 서비스 노출", "서비스 오동작 유도/중단"),
+    "914c-g": ("레거시/벤더 전용 서비스 노출", "취약 구현 탐색 및 악용"),
+    "cldap": ("디렉터리 정보 노출", "AD 정보 수집, 반사 트래픽 악용"),
+    "rsh": ("원격 셸 직접 노출", "신뢰관계 악용/명령 실행"),
+    "rcp": ("인증 취약 파일 전송", "파일 무단 전송/덮어쓰기"),
+    "rlogin": ("신뢰관계/평문 인증 의존", "신뢰호스트 위조, 계정 탈취"),
+    "ftp-proxy": ("오픈 프록시/중계 악용", "우회 접속, 익명 프록시 남용"),
+    "sip-tls": ("VoIP 제어 채널 노출", "사용자 열거/도청 시도"),
+}
+
 
 def default_options_as_rows():
     """DEFAULT_OPTIONS 튜플 → load_options_xlsx 가 반환하는 dict 행 리스트와 같은 포맷.
@@ -208,16 +270,21 @@ def default_categories_as_map():
             continue
         key = (name or "").strip().lower()
         if key:
-            catmap[key] = {"category": category, "usage": usage, "desc": desc}
+            risk, surface = SERVICE_EXPOSURE_GUIDE.get(key, ("", ""))
+            catmap[key] = {"category": category, "usage": usage, "desc": desc,
+                           "exposure_risk": risk, "attack_surface": surface}
     return catmap
 
 
 def write_default_categories_xlsx(path):
-    """categories.xlsx 가 없을 때 기본값으로 새 파일 작성 (4컬럼)."""
-    rows = [["서비스명", "분류", "용도", "설명"]]
+    """categories.xlsx 가 없을 때 기본값으로 새 파일 작성 (6컬럼)."""
+    rows = [["서비스명", "분류", "용도", "설명", "노출위험", "공격표면"]]
     for tup in DEFAULT_CATEGORIES:
-        rows.append(list(tup))
-    xlsx_io.write_xlsx(path, rows, col_widths=[20, 14, 12, 50])
+        row = list(tup)
+        key = (row[0] or "").strip().lower() if row else ""
+        risk, surface = SERVICE_EXPOSURE_GUIDE.get(key, ("", ""))
+        rows.append(row + [risk, surface])
+    xlsx_io.write_xlsx(path, rows, col_widths=[20, 14, 12, 50, 34, 34])
 
 
 def load_categories_xlsx(path):
@@ -253,10 +320,17 @@ def load_categories_xlsx(path):
         else:
             usage = ""
             desc = ""
+        if len(row) >= 6:
+            exposure_risk = (row[4] or "").strip()
+            attack_surface = (row[5] or "").strip()
+        else:
+            exposure_risk, attack_surface = SERVICE_EXPOSURE_GUIDE.get(name, ("", ""))
         catmap[name] = {
             "category": cat,
             "usage": usage,
             "desc": desc,
+            "exposure_risk": exposure_risk,
+            "attack_surface": attack_surface,
         }
     return catmap, errors
 
@@ -984,6 +1058,400 @@ class Tooltip:
 
 # ============================================================ main app
 
+
+
+def load_categories_for_cli(categories_xlsx_path=None):
+    """CLI 변환용 categories map 로드. 실패/미존재 시 기본값 사용."""
+    if categories_xlsx_path and os.path.isfile(categories_xlsx_path):
+        catmap, _errors = load_categories_xlsx(categories_xlsx_path)
+        if catmap:
+            return catmap
+    return default_categories_as_map()
+
+
+def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categories_xlsx_path=None, services_table=None):
+    """GUI 없이 XML->CSV 단독 변환."""
+    categories = load_categories_for_cli(categories_xlsx_path)
+    if services_table is None:
+        nmap_exe = find_nmap_exe()
+        services_table = parse_nmap_services(nmap_exe) if nmap_exe else {}
+
+    def _lookup_full_local(probed_name, guessed_name):
+        for n in (probed_name, guessed_name):
+            if n:
+                key = n.rstrip("?").strip().lower()
+                if key and key in categories:
+                    info = categories[key]
+                    return (info.get("category", "미분류"),
+                            info.get("usage", ""),
+                            info.get("exposure_risk", ""),
+                            info.get("attack_surface", ""))
+        return "미분류", "", "", ""
+
+    root = parse_nmap_xml_resilient(xml_path)
+    rows = []
+
+    for host in root.findall("host"):
+        addr = ""
+        for a in host.findall("address"):
+            if a.get("addrtype") == "ipv4":
+                addr = a.get("addr", "")
+                break
+        if not addr:
+            for a in host.findall("address"):
+                if a.get("addrtype") in ("ipv6", "mac"):
+                    addr = a.get("addr", "")
+                    break
+
+        hostname = ""
+        hostnames_el = host.find("hostnames")
+        if hostnames_el is not None:
+            first_hn = hostnames_el.find("hostname")
+            if first_hn is not None:
+                hostname = first_hn.get("name", "") or ""
+
+        os_str = ""
+        os_el = host.find("os")
+        if os_el is not None:
+            best = None
+            for m in os_el.findall("osmatch"):
+                try:
+                    acc = int(m.get("accuracy", "0") or "0")
+                except ValueError:
+                    acc = 0
+                if best is None or acc > best[1]:
+                    best = (m.get("name", "") or "", acc)
+            if best and best[0]:
+                os_str = f"{best[0]} ({best[1]}%)" if best[1] else best[0]
+
+        ports_el = host.find("ports")
+        if ports_el is None:
+            continue
+        for port in ports_el.findall("port"):
+            portid = port.get("portid", "")
+            proto = port.get("protocol", "")
+            state_el = port.find("state")
+            state = state_el.get("state", "") if state_el is not None else ""
+            if open_only and state != "open":
+                continue
+            try:
+                portnum = int(portid)
+            except ValueError:
+                portnum = 0
+            guessed = services_table.get((portnum, proto), "")
+            svc_el = port.find("service")
+            if svc_el is not None:
+                name = svc_el.get("name", "") or ""
+                method = svc_el.get("method", "") or ""
+                product = svc_el.get("product", "") or ""
+                version = svc_el.get("version", "") or ""
+                extrainfo = svc_el.get("extrainfo", "") or ""
+                ostype = svc_el.get("ostype", "") or ""
+                if method == "probed":
+                    probed_short = name
+                elif method == "table":
+                    probed_short = f"{name}?" if name else ""
+                else:
+                    probed_short = name
+                detail = " ".join(p for p in (product, version, extrainfo, ostype) if p).strip()
+            else:
+                probed_short = ""
+                detail = ""
+
+            category, usage, exposure_risk, attack_surface = _lookup_full_local(probed_short, guessed)
+            identification = compute_identification_status(svc_el)
+            scripts = port.findall("script")
+            nse_data = [(sc.get("id", "") or "", sc.get("output", "") or "") for sc in scripts]
+            remarks = compute_remarks(detail, nse_data)
+            sids_joined = ", ".join(sid for sid, _ in nse_data if sid)
+            output_lines = []
+            for sid, raw in nse_data:
+                cleaned = (raw or "").replace("\r", " ").replace("\n", " | ")
+                output_lines.append(f"[{sid}] {cleaned}" if sid else cleaned)
+            output_joined = "\n".join(output_lines)
+
+            rows.append([addr, hostname, os_str, portid, proto, state, guessed, probed_short,
+                         identification, category, usage, exposure_risk, attack_surface,
+                         detail, remarks, sids_joined, output_joined])
+
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow([
+            "IP", "호스트", "OS",
+            "PORT", "프로토콜",
+            "포트상태", "추측서비스", "확인서비스(short)",
+            "식별", "분류", "용도", "노출위험", "공격표면",
+            "상세(제품/버전)", "비고",
+            "NSE스크립트명", "스크립트출력",
+        ])
+        for r in rows:
+            w.writerow(r)
+
+
+def run_cli_xml2csv(args):
+    xml_input = args.xml2csv
+    out_dir = args.out or os.path.dirname(os.path.abspath(xml_input)) or os.getcwd()
+    os.makedirs(out_dir, exist_ok=True)
+
+    if os.path.isdir(xml_input):
+        xml_files = sorted([os.path.join(xml_input, n) for n in os.listdir(xml_input) if n.lower().endswith('.xml')])
+    else:
+        xml_files = [xml_input]
+
+    if not xml_files:
+        print('[xml2csv] 변환 대상 xml 파일이 없습니다.')
+        return 1
+
+    nmap_exe = find_nmap_exe()
+    services_table = parse_nmap_services(nmap_exe) if nmap_exe else {}
+
+    ok_count = 0
+    _set_system_awake(True)
+    try:
+        for xml_path in xml_files:
+            if not os.path.isfile(xml_path):
+                print(f'[xml2csv] 파일 없음: {xml_path}')
+                continue
+            base = os.path.splitext(os.path.basename(xml_path))[0]
+            csv_path = os.path.join(out_dir, base + '.csv')
+            try:
+                convert_xml_to_csv_standalone(xml_path, csv_path, open_only=args.open_only,
+                                              categories_xlsx_path=args.categories,
+                                              services_table=services_table)
+                ok_count += 1
+                print(f'[xml2csv] OK: {xml_path} -> {csv_path}')
+            except (ET.ParseError, OSError) as e:
+                print(f'[xml2csv] FAIL: {xml_path} ({e})')
+    finally:
+        _set_system_awake(False)
+
+    return 0 if ok_count else 1
+
+
+def _normalize_for_diff(s):
+    t = (s or "").strip().lower()
+    return re.sub(r"\s+", " ", t)
+
+
+def _digest_for_diff(*parts):
+    base = "||".join(_normalize_for_diff(p) for p in parts)
+    return hashlib.sha256(base.encode("utf-8", errors="replace")).hexdigest()
+
+
+def parse_nmap_xml_resilient(xml_path):
+    """중단/절전 등으로 XML tail 이 깨진 경우 가능한 범위에서 host 단위 복구 파싱."""
+    try:
+        return ET.parse(xml_path).getroot()
+    except ET.ParseError:
+        with open(xml_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+        last_host_end = text.rfind("</host>")
+        if last_host_end == -1 or "<nmaprun" not in text:
+            raise
+        recovered = text[: last_host_end + len("</host>")] + "\n</nmaprun>\n"
+        return ET.fromstring(recovered)
+
+
+def _set_system_awake(enable):
+    """Windows 절전 억제 토글. 비-Windows/실패 시 조용히 무시."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ES_CONTINUOUS = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001
+        ES_AWAYMODE_REQUIRED = 0x00000040
+        if enable:
+            ctypes.windll.kernel32.SetThreadExecutionState(
+                ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED
+            )
+        else:
+            ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+    except Exception:
+        pass
+
+
+def parse_csv_rows_for_diff(csv_path):
+    rows = []
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            ip = (row.get("IP") or "").strip()
+            proto = ((row.get("프로토콜") or row.get("PROTO") or "").strip().lower())
+            port = (row.get("PORT") or row.get("port") or "").strip()
+            state = (row.get("포트상태") or row.get("STATE") or "").strip().lower()
+            service = (row.get("확인서비스(short)") or row.get("SERVICE") or "").strip()
+            detail = (row.get("상세(제품/버전)") or row.get("DETAIL") or "").strip()
+            nse = (row.get("스크립트출력") or row.get("NSE") or "").strip()
+            if not (ip and proto and port):
+                continue
+            rows.append({
+                "ip": ip,
+                "proto": proto,
+                "port": str(port),
+                "state": state,
+                "service": service,
+                "detail": detail,
+                "digest": _digest_for_diff(service, detail, nse),
+            })
+    return rows
+
+
+def parse_xml_rows_for_diff(xml_path):
+    rows = []
+    root = parse_nmap_xml_resilient(xml_path)
+    for host in root.findall("host"):
+        ip = ""
+        for a in host.findall("address"):
+            if a.get("addrtype") == "ipv4":
+                ip = a.get("addr", "")
+                break
+        if not ip:
+            for a in host.findall("address"):
+                if a.get("addrtype") in ("ipv6", "mac"):
+                    ip = a.get("addr", "")
+                    break
+        ports_el = host.find("ports")
+        if ports_el is None:
+            continue
+        for port in ports_el.findall("port"):
+            portid = (port.get("portid", "") or "").strip()
+            proto = (port.get("protocol", "") or "").strip().lower()
+            state_el = port.find("state")
+            state = (state_el.get("state", "") if state_el is not None else "").strip().lower()
+            svc_el = port.find("service")
+            service = ""
+            detail = ""
+            if svc_el is not None:
+                service = (svc_el.get("name", "") or "").strip()
+                product = svc_el.get("product", "") or ""
+                version = svc_el.get("version", "") or ""
+                extrainfo = svc_el.get("extrainfo", "") or ""
+                ostype = svc_el.get("ostype", "") or ""
+                detail = " ".join(p for p in (product, version, extrainfo, ostype) if p).strip()
+            scripts = port.findall("script")
+            nse = "\n".join((sc.get("output", "") or "") for sc in scripts)
+            if not (ip and proto and portid):
+                continue
+            rows.append({
+                "ip": ip,
+                "proto": proto,
+                "port": str(portid),
+                "state": state,
+                "service": service,
+                "detail": detail,
+                "digest": _digest_for_diff(service, detail, nse),
+            })
+    return rows
+
+
+def parse_rows_for_diff(path):
+    low = path.lower()
+    if low.endswith(".xml"):
+        return parse_xml_rows_for_diff(path)
+    return parse_csv_rows_for_diff(path)
+
+
+
+
+def _safe_stem_for_path(path):
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return re.sub(r'[^A-Za-z0-9._-]+', '_', stem) or 'file'
+
+def run_cli_diff(args):
+    _set_system_awake(True)
+    try:
+        if not os.path.isfile(args.base):
+            raise OSError(f"기준 파일이 없습니다: {args.base}")
+        if not os.path.isfile(args.curr):
+            raise OSError(f"현재 파일이 없습니다: {args.curr}")
+        base_rows = parse_rows_for_diff(args.base)
+        curr_rows = parse_rows_for_diff(args.curr)
+        asset_id = args.asset or "default"
+        out_dir = args.out or os.path.dirname(os.path.abspath(args.curr)) or os.getcwd()
+        os.makedirs(out_dir, exist_ok=True)
+
+        def keyf(r):
+            return (asset_id, r["ip"], r["proto"], r["port"])
+
+        base_map = {keyf(r): r for r in base_rows}
+        curr_map = {keyf(r): r for r in curr_rows}
+        all_keys = sorted(set(base_map) | set(curr_map))
+        diff_rows = []
+        snapshot_rows = []
+        summary = {"NEW_OPEN": 0, "CLOSED": 0, "CHANGED": 0, "UNCHANGED": 0}
+
+        for k in all_keys:
+            b = base_map.get(k)
+            c = curr_map.get(k)
+            if b is None and c is not None and c.get("state") == "open":
+                change = "NEW_OPEN"
+            elif b is not None and b.get("state") == "open" and (c is None or c.get("state") != "open"):
+                change = "CLOSED"
+            elif b is not None and c is not None:
+                changed_fields = []
+                for fld in ("state", "service", "detail", "digest"):
+                    if _normalize_for_diff(b.get(fld, "")) != _normalize_for_diff(c.get(fld, "")):
+                        changed_fields.append(fld)
+                change = "CHANGED" if changed_fields else "UNCHANGED"
+            else:
+                change = "UNCHANGED"
+
+            summary[change] = summary.get(change, 0) + 1
+            if args.only_changes and change == "UNCHANGED":
+                continue
+            changed_fields_txt = ""
+            if b is not None and c is not None:
+                changed_fields_txt = ",".join(
+                    fld for fld in ("state", "service", "detail", "digest")
+                    if _normalize_for_diff(b.get(fld, "")) != _normalize_for_diff(c.get(fld, ""))
+                )
+            diff_rows.append([
+                change, asset_id, k[1], k[2], k[3],
+                (b or {}).get("state", ""), (c or {}).get("state", ""),
+                (b or {}).get("service", ""), (c or {}).get("service", ""),
+                (b or {}).get("detail", ""), (c or {}).get("detail", ""),
+                (b or {}).get("digest", ""), (c or {}).get("digest", ""),
+                changed_fields_txt,
+            ])
+
+        for r in curr_rows:
+            snapshot_rows.append([asset_id, r["ip"], r["proto"], r["port"], r["state"], r["service"], r["detail"], r["digest"]])
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_stem = _safe_stem_for_path(args.base)
+        curr_stem = _safe_stem_for_path(args.curr)
+        diff_path = os.path.join(out_dir, f"diff_{base_stem}_vs_{curr_stem}_{stamp}.csv")
+        summary_path = os.path.join(out_dir, f"summary_{base_stem}_vs_{curr_stem}_{stamp}.csv")
+        snapshot_path = os.path.join(out_dir, f"snapshot_{curr_stem}_{stamp}.csv")
+
+        with open(diff_path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["change_type", "asset_id", "key_ip", "key_proto", "key_port",
+                        "base_state", "curr_state", "base_service", "curr_service",
+                        "base_detail", "curr_detail", "base_digest", "curr_digest",
+                        "changed_fields"])
+            w.writerows(diff_rows)
+
+        with open(summary_path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["asset_id", "new_open_count", "closed_count", "changed_count",
+                        "unchanged_count", "total_keys_base", "total_keys_curr"])
+            w.writerow([asset_id, summary["NEW_OPEN"], summary["CLOSED"], summary["CHANGED"],
+                        summary["UNCHANGED"], len(base_map), len(curr_map)])
+
+        with open(snapshot_path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["asset_id", "ip", "proto", "port", "state", "service", "detail", "digest"])
+            w.writerows(snapshot_rows)
+
+        print(f"[diff] OK: {diff_path}")
+        print(f"[diff] OK: {summary_path}")
+        print(f"[diff] OK: {snapshot_path}")
+        return 0
+    finally:
+        _set_system_awake(False)
+
 class NmapParserApp:
     def __init__(self, root):
         self.root = root
@@ -1262,8 +1730,16 @@ class NmapParserApp:
         csv_frame = tk.LabelFrame(self.root, text="결과 CSV 변환")
         self.csv_convert = tk.BooleanVar(value=True)
         self.csv_open_only = tk.BooleanVar(value=True)
+        self.diff_only_changes = tk.BooleanVar(value=True)
+        self.diff_asset_id = tk.StringVar(value="default")
         tk.Checkbutton(csv_frame, text="CSV 로 변환", variable=self.csv_convert).pack(side="left", padx=6, pady=2)
         tk.Checkbutton(csv_frame, text="open 포트만 CSV 에 포함", variable=self.csv_open_only).pack(side="left", padx=6, pady=2)
+        tk.Checkbutton(csv_frame, text="Diff 변경행만", variable=self.diff_only_changes).pack(side="left", padx=4, pady=2)
+        tk.Label(csv_frame, text="asset_id:").pack(side="left", padx=(6, 2))
+        tk.Entry(csv_frame, textvariable=self.diff_asset_id, width=12).pack(side="left", padx=(0, 4))
+        tk.Button(csv_frame, text="XML 파일→CSV", command=self._convert_xml_file_dialog).pack(side="left", padx=4)
+        tk.Button(csv_frame, text="XML 폴더 일괄→CSV", command=self._convert_xml_folder_dialog).pack(side="left", padx=4)
+        tk.Button(csv_frame, text="기준/현재 비교(Diff)", command=self._run_diff_dialog).pack(side="left", padx=4)
         tk.Label(csv_frame, text=
                  "  CSV 15컬럼: IP, 호스트, OS, PORT, 프로토콜, 포트상태, 추측/확인서비스, 식별, 분류, 용도, 상세, 비고, NSE스크립트명, 스크립트출력",
                  fg="#555").pack(side="left", padx=4)
@@ -1577,14 +2053,17 @@ class NmapParserApp:
 
     def _lookup_full(self, probed_name, guessed_name):
         """확인서비스(short) 또는 추측서비스 이름으로 lookup.
-        리턴: (분류, 용도). 못 찾으면 ('미분류', '')"""
+        리턴: (분류, 용도, 노출위험, 공격표면). 못 찾으면 ('미분류', '', '', '')"""
         for n in (probed_name, guessed_name):
             if n:
                 key = n.rstrip("?").strip().lower()
                 if key and key in self.categories:
                     info = self.categories[key]
-                    return info.get("category", "미분류"), info.get("usage", "")
-        return "미분류", ""
+                    return (info.get("category", "미분류"),
+                            info.get("usage", ""),
+                            info.get("exposure_risk", ""),
+                            info.get("attack_surface", ""))
+        return "미분류", "", "", ""
 
     def _open_options_folder(self):
         """options.xlsx 폴더 열기 — 메모리 모드 / UNC hang 대비 try/except."""
@@ -2304,6 +2783,7 @@ class NmapParserApp:
         # 한글 Windows 의 nmap.exe 는 콘솔 코드페이지(cp949) 로 출력 → utf-8 강제 시
         # mojibake. locale.getpreferredencoding(False) 가 그 코드페이지를 반환하므로
         # 사용. 그래도 누락 바이트는 errors="replace" 로 안전 처리.
+        _set_system_awake(True)
         try:
             stream_encoding = locale.getpreferredencoding(False) or "utf-8"
         except Exception:
@@ -2390,6 +2870,8 @@ class NmapParserApp:
         except Exception as e:
             self._scan_watchdog_active = False
             self.root.after(0, self._scan_error, f"예상치 못한 오류: {e}")
+        finally:
+            _set_system_awake(False)
 
     def _scan_watchdog_tick(self):
         """5초마다 실행 — 무응답 / 비정상 종료 모니터링."""
@@ -2603,12 +3085,146 @@ class NmapParserApp:
         if ans:
             self._open_output_folder()
 
+    def _convert_xml_file_dialog(self):
+        """스캔 없이 XML 파일 1개를 CSV로 변환."""
+        xml_path = filedialog.askopenfilename(
+            title="변환할 XML 파일 선택",
+            filetypes=[("nmap XML", "*.xml"), ("모든 파일", "*.*")]
+        )
+        if not xml_path:
+            return
+        out_dir = filedialog.askdirectory(title="CSV 출력 폴더 선택", initialdir=self.output_folder.get() or os.getcwd())
+        if not out_dir:
+            return
+        try:
+            _set_system_awake(True)
+            self._ensure_services_table()
+            base = os.path.splitext(os.path.basename(xml_path))[0]
+            csv_path = os.path.join(out_dir, base + ".csv")
+            convert_xml_to_csv_standalone(
+                xml_path, csv_path,
+                open_only=self.csv_open_only.get(),
+                categories_xlsx_path=self.categories_xlsx_path,
+                services_table=self.services_table,
+            )
+            messagebox.showinfo("변환 완료", f"CSV 생성 완료:\n{csv_path}")
+        except (ET.ParseError, OSError) as e:
+            messagebox.showerror("변환 실패", f"XML->CSV 변환 중 오류: {e}")
+        finally:
+            _set_system_awake(False)
+
+    def _convert_xml_folder_dialog(self):
+        """스캔 없이 XML 폴더 일괄 변환."""
+        folder = filedialog.askdirectory(title="XML 폴더 선택", initialdir=self.output_folder.get() or os.getcwd())
+        if not folder:
+            return
+        out_dir = filedialog.askdirectory(title="CSV 출력 폴더 선택", initialdir=folder)
+        if not out_dir:
+            return
+        xml_files = sorted([os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(".xml")])
+        if not xml_files:
+            messagebox.showinfo("변환 대상 없음", "선택한 폴더에 XML 파일이 없습니다.")
+            return
+        ok = 0
+        fails = []
+        _set_system_awake(True)
+        try:
+            self._ensure_services_table()
+            for xml_path in xml_files:
+                try:
+                    base = os.path.splitext(os.path.basename(xml_path))[0]
+                    csv_path = os.path.join(out_dir, base + ".csv")
+                    convert_xml_to_csv_standalone(
+                        xml_path, csv_path,
+                        open_only=self.csv_open_only.get(),
+                        categories_xlsx_path=self.categories_xlsx_path,
+                        services_table=self.services_table,
+                    )
+                    ok += 1
+                except (ET.ParseError, OSError) as e:
+                    fails.append(f"{os.path.basename(xml_path)}: {e}")
+        finally:
+            _set_system_awake(False)
+        msg = f"완료: {ok}/{len(xml_files)}개 변환"
+        if fails:
+            msg += "\n\n실패 목록:\n" + "\n".join(fails[:15])
+        messagebox.showinfo("일괄 변환 결과", msg)
+
+    def _run_diff_dialog(self):
+        """GUI에서 기준/현재 파일을 선택해 diff CSV 생성."""
+        base_path = filedialog.askopenfilename(
+            title="기준 파일 선택 (.xml/.csv)",
+            filetypes=[("지원 파일", "*.xml *.csv"), ("모든 파일", "*.*")]
+        )
+        if not base_path:
+            return
+        curr_path = filedialog.askopenfilename(
+            title="현재 파일 선택 (.xml/.csv)",
+            filetypes=[("지원 파일", "*.xml *.csv"), ("모든 파일", "*.*")]
+        )
+        if not curr_path:
+            return
+        out_dir = filedialog.askdirectory(
+            title="Diff 출력 폴더 선택",
+            initialdir=self.output_folder.get() or os.getcwd()
+        )
+        if not out_dir:
+            return
+
+        asset_id = (self.diff_asset_id.get() or "default").strip() or "default"
+
+        class _Args:
+            pass
+        args = _Args()
+        args.diff = True
+        args.base = base_path
+        args.curr = curr_path
+        args.out = out_dir
+        args.asset = asset_id
+        args.only_changes = bool(self.diff_only_changes.get())
+        try:
+            rc = run_cli_diff(args)
+            if rc == 0:
+                base_stem = _safe_stem_for_path(base_path)
+                curr_stem = _safe_stem_for_path(curr_path)
+                diff_candidates = sorted(glob.glob(os.path.join(
+                    out_dir, f"diff_{base_stem}_vs_{curr_stem}_*.csv")), key=os.path.getmtime)
+                summary_candidates = sorted(glob.glob(os.path.join(
+                    out_dir, f"summary_{base_stem}_vs_{curr_stem}_*.csv")), key=os.path.getmtime)
+                snapshot_candidates = sorted(glob.glob(os.path.join(
+                    out_dir, f"snapshot_{curr_stem}_*.csv")), key=os.path.getmtime)
+                diff_name = os.path.basename(diff_candidates[-1]) if diff_candidates else "(diff 파일 확인 필요)"
+                summary_name = os.path.basename(summary_candidates[-1]) if summary_candidates else "(summary 파일 확인 필요)"
+                snapshot_name = os.path.basename(snapshot_candidates[-1]) if snapshot_candidates else "(snapshot 파일 확인 필요)"
+                messagebox.showinfo(
+                    "Diff 완료",
+                    "기준/현재 비교가 완료되었습니다.\n"
+                    f"- 기준: {os.path.basename(base_path)}\n"
+                    f"- 현재: {os.path.basename(curr_path)}\n"
+                    f"- diff: {diff_name}\n"
+                    f"- summary: {summary_name}\n"
+                    f"- snapshot: {snapshot_name}\n"
+                    f"- 출력 폴더: {out_dir}"
+                )
+                try:
+                    if messagebox.askyesno("폴더 열기", "결과 폴더를 열까요?"):
+                        if os.path.isdir(out_dir):
+                            if sys.platform == "win32":
+                                os.startfile(out_dir)  # type: ignore
+                            else:
+                                subprocess.Popen(["xdg-open", out_dir])
+                except Exception:
+                    pass
+            else:
+                messagebox.showerror("Diff 실패", "비교 작업이 실패했습니다.")
+        except (ET.ParseError, OSError, ValueError) as e:
+            messagebox.showerror("Diff 실패", f"비교 중 오류: {e}")
+
     # ----------------------------- CSV 변환 (이전과 동일 로직)
     def _convert_to_csv(self, xml_path):
         # CSV 작성 시점엔 services 테이블이 반드시 채워져야 함 — 지연 로드 보강.
         self._ensure_services_table()
-        tree = ET.parse(xml_path)
-        root = tree.getroot()
+        root = parse_nmap_xml_resilient(xml_path)
         rows = []
         open_only = self.csv_open_only.get()
 
@@ -2679,7 +3295,7 @@ class NmapParserApp:
                     probed_short = ""
                     detail = ""
 
-                category, usage = self._lookup_full(probed_short, guessed)
+                category, usage, exposure_risk, attack_surface = self._lookup_full(probed_short, guessed)
 
                 # 식별 (4값) — service XML 노드 그대로 분석
                 identification = compute_identification_status(svc_el)
@@ -2701,7 +3317,7 @@ class NmapParserApp:
                     addr, hostname, os_str,                     # host-level (이슈 4)
                     portid, proto,                              # port-level (proto 이슈 4)
                     state, guessed, probed_short,
-                    identification, category, usage,
+                    identification, category, usage, exposure_risk, attack_surface,
                     detail, remarks,
                     sids_joined, output_joined,
                 ])
@@ -2713,7 +3329,7 @@ class NmapParserApp:
                 "IP", "호스트", "OS",
                 "PORT", "프로토콜",
                 "포트상태", "추측서비스", "확인서비스(short)",
-                "식별", "분류", "용도",
+                "식별", "분류", "용도", "노출위험", "공격표면",
                 "상세(제품/버전)", "비고",
                 "NSE스크립트명", "스크립트출력",
             ])
@@ -2723,6 +3339,30 @@ class NmapParserApp:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="nmapParser")
+    parser.add_argument("--xml2csv", help="XML 파일 또는 XML 폴더를 CSV로 변환")
+    parser.add_argument("--out", help="xml2csv 출력 폴더")
+    parser.add_argument("--open-only", action="store_true", help="open 포트만 CSV 포함")
+    parser.add_argument("--categories", help="categories.xlsx 경로 (선택)")
+    parser.add_argument("--diff", action="store_true", help="기준/현재 파일 비교(diff) 실행")
+    parser.add_argument("--base", help="diff 기준 파일 (.xml/.csv)")
+    parser.add_argument("--curr", help="diff 현재 파일 (.xml/.csv)")
+    parser.add_argument("--asset", help="asset_id (기본: default)")
+    parser.add_argument("--only-changes", action="store_true", help="diff에서 변경 행만 출력")
+    args = parser.parse_args()
+
+    if args.xml2csv:
+        return run_cli_xml2csv(args)
+
+    if args.diff:
+        if not args.base or not args.curr:
+            parser.error("--diff 사용 시 --base 와 --curr 가 필요합니다.")
+        try:
+            return run_cli_diff(args)
+        except (OSError, ET.ParseError, ValueError) as e:
+            print(f"[diff] FAIL: {e}")
+            return 1
+
     root = tk.Tk()
     try:
         style = ttk.Style()
@@ -2732,7 +3372,8 @@ def main():
         pass
     NmapParserApp(root)
     root.mainloop()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
