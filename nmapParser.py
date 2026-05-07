@@ -1898,7 +1898,7 @@ class NmapParserApp:
         tk.Button(csv_frame, text="XML 폴더 일괄→CSV", command=self._convert_xml_folder_dialog).pack(side="left", padx=4)
         tk.Button(csv_frame, text="기준/현재 비교(Diff)", command=self._run_diff_dialog).pack(side="left", padx=4)
         tk.Label(csv_frame, text=
-                 "  CSV 15컬럼: IP, 호스트, OS, PORT, 프로토콜, 포트상태, 추측/확인서비스, 식별, 분류, 용도, 상세, 비고, NSE스크립트명, 스크립트출력",
+                 "  CSV 19컬럼: IP, 호스트, OS, PORT, 프로토콜, 포트상태, 추측/확인서비스, 식별, 분류, 용도, 위험도, 노출위험, 공격표면, 출처, 상세, 비고, NSE스크립트명, 스크립트출력",
                  fg="#555").pack(side="left", padx=4)
 
         # 7. 실행 버튼
