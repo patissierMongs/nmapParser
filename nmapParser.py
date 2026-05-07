@@ -3197,24 +3197,34 @@ class NmapParserApp:
             stream_encoding = "utf-8"
 
         try:
-            # cwd 는 임시 폴더로 — 사용자가 UNC/매핑 드라이브 위에서 실행한 경우 nmap stdout
-            # 이 stall 되는 사례 회피. -oA 는 항상 절대 경로라 cwd 영향 없음.
-            import tempfile as _tempfile
+            # cwd: v0.2 는 cwd 미지정 (=parent inherit). 87322f8/93a875d 에서 무조건 tempdir
+            # 로 바꾸면서 일부 환경에서 권한/접근 이슈로 회귀가 발생한 정황이 있음.
+            #   → 기본은 cwd=None (parent inherit, v0.2 동작) 으로 복귀.
+            #   → 명령 안에 UNC 경로(\\server\share) 가 있을 때만 임시 폴더로 폴백.
+            _scan_cwd = None
             try:
-                _scan_cwd = _tempfile.gettempdir()
+                if sys.platform == "win32":
+                    for _tok in cmd:
+                        if isinstance(_tok, str) and _tok.startswith("\\\\"):
+                            import tempfile as _tempfile
+                            _scan_cwd = _tempfile.gettempdir()
+                            break
             except Exception:
                 _scan_cwd = None
 
             kwargs = dict(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                # bufsize=-1 (OS 기본 버퍼링) — binary 모드. read1 메서드 항상 존재.
-                bufsize=-1,
+                # bufsize=0 (unbuffered) — v0.2 기본값으로 복귀. read1 폴백 (a045f58) 으로
+                # AttributeError 안전. -1 (OS full-buffer) 로 두면 nmap stdout 이 OS 버퍼에
+                # 갇혀 GUI 가 수십 초간 무응답으로 보이고 watchdog 이 헛 경보를 낸다.
+                bufsize=0,
                 # PyInstaller --windowed 환경에서 부모 프로세스의 stdin/stdout 핸들이
                 # None 또는 NUL 일 수 있어, 자식이 부모 stdin 을 잘못 상속받지 않게 명시 차단.
                 stdin=subprocess.DEVNULL,
-                cwd=_scan_cwd,
             )
+            if _scan_cwd is not None:
+                kwargs["cwd"] = _scan_cwd
             if sys.platform == "win32":
                 # CREATE_NO_WINDOW + STARTUPINFO 둘 다 명시. 일부 Windows 버전에서
                 # creationflags 만으로는 콘솔 창이 깜빡 뜰 수 있어 STARTUPINFO 보강.
@@ -3244,11 +3254,12 @@ class NmapParserApp:
             except Exception:
                 pass
 
-            # 출력 무응답 watchdog 시작 (5초 / 30초 hint)
+            # 출력 무응답 watchdog 시작 (30초 hint / 90초 warn).
+            # 5/30초는 nmap 의 정상 phase 변경이나 NSE 로딩 중에도 헛 경보가 나서 상향.
             self._scan_last_output_at = time.monotonic()
             self._scan_started_at = time.monotonic()
             self._scan_watchdog_active = True
-            self.root.after(5000, self._scan_watchdog_tick)
+            self.root.after(15000, self._scan_watchdog_tick)
 
             buf = b""
             # bufsize=0 (unbuffered) 경로에서 stdout 이 RawIOBase 라 read1() 메서드가 없을 수 있음.
@@ -3315,7 +3326,10 @@ class NmapParserApp:
             _set_system_awake(False)
 
     def _scan_watchdog_tick(self):
-        """5초마다 실행 — 무응답 / 비정상 종료 모니터링."""
+        """15초마다 실행 — 무응답 / 비정상 종료 모니터링.
+        nmap 은 호스트 발견 / 포트 스캔 phase 전환 / NSE 로딩 중 정상적으로 30초 이상
+        조용할 수 있음. 그래서 30초 hint, 90초에 비로소 warning.
+        """
         if not getattr(self, "_scan_watchdog_active", False):
             return
         proc = self.proc
@@ -3331,14 +3345,14 @@ class NmapParserApp:
                     f"[nmapParser] 프로세스 조기 종료 감지 (rc={rc}). "
                     f"AV/정책 차단 가능성. 명령 / nmap.exe 경로 확인.\n")
             return
-        if elapsed_silent >= 30:
+        if elapsed_silent >= 90:
             self.status_var.set(
                 f"⚠ nmap 무응답 {int(elapsed_silent)}초 — DNS / 방화벽 / AV / NSE 로딩 가능성")
-        elif elapsed_silent >= 5:
+        elif elapsed_silent >= 30:
             self.status_var.set(
                 f"nmap 출력 대기 중 ({int(elapsed_silent)}초 경과 / 총 {int(elapsed_total)}초)")
-        # 다음 tick
-        self.root.after(5000, self._scan_watchdog_tick)
+        # 다음 tick (15초)
+        self.root.after(15000, self._scan_watchdog_tick)
 
     def _append_log(self, line):
         # BEL / 기타 invalid control char 제거 — tk system sound 폭주 방지.
