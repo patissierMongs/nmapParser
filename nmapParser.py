@@ -628,6 +628,88 @@ def _app_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _user_data_dir():
+    """OS 별 쓰기 가능한 사용자 데이터 폴더. 없으면 생성 시도.
+    - Windows: %APPDATA%\\nmapParser
+    - macOS:   ~/Library/Application Support/nmapParser
+    - 그 외:   $XDG_CONFIG_HOME/nmapParser 또는 ~/.config/nmapParser
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    d = os.path.join(base, "nmapParser")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        pass
+    return d
+
+
+def _is_dir_writable(path):
+    """파일을 실제로 한 번 써 보고 지움 — read-only 폴더(예: Program Files) 감지."""
+    if not path or not os.path.isdir(path):
+        return False
+    probe = os.path.join(path, ".nmapParser_write_probe")
+    try:
+        with open(probe, "w") as f:
+            f.write("")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+_DATA_DIR_PIN_NAME = "data_dir.txt"
+
+
+def _read_pinned_data_dir():
+    """사용자가 명시적으로 고른 설정 폴더를 user_data_dir 의 data_dir.txt 에서 읽음."""
+    try:
+        p = os.path.join(_user_data_dir(), _DATA_DIR_PIN_NAME)
+        if os.path.isfile(p):
+            with open(p, "r", encoding="utf-8") as f:
+                d = f.read().strip()
+            if d and os.path.isdir(d):
+                return d
+    except OSError:
+        pass
+    return None
+
+
+def _write_pinned_data_dir(path):
+    """사용자가 고른 설정 폴더를 user_data_dir 에 기록. 실패해도 조용히 넘어감."""
+    try:
+        p = os.path.join(_user_data_dir(), _DATA_DIR_PIN_NAME)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(path or "")
+        return True
+    except OSError:
+        return False
+
+
+def _resolve_data_dir():
+    """options.xlsx / categories.xlsx 이 살 폴더 결정.
+    우선순위:
+      1. 사용자가 명시적으로 고정한 경로 (user_data_dir/data_dir.txt)
+      2. _app_dir() — 기존 xlsx 가 있거나 쓰기 가능한 경우
+      3. _user_data_dir() — 앱 폴더가 read-only(Program Files 등)일 때 자동 fallback
+    """
+    pinned = _read_pinned_data_dir()
+    if pinned:
+        return pinned
+    here = _app_dir()
+    has_existing = (
+        os.path.isfile(os.path.join(here, OPTIONS_XLSX_NAME))
+        or os.path.isfile(os.path.join(here, CATEGORIES_XLSX_NAME))
+    )
+    if has_existing or _is_dir_writable(here):
+        return here
+    return _user_data_dir()
+
+
 # ============================================================ tooltip
 
 class Tooltip:
@@ -720,10 +802,12 @@ class NmapParserApp:
         # 1280px 기준 panel 폭 ~620px → 한 cell 200~220px → 3 col 적정
         self.panel_cols = 3
 
-        here = _app_dir()
-        self.options_xlsx_path = os.path.join(here, OPTIONS_XLSX_NAME)
-        self.options_csv_path = os.path.join(here, OPTIONS_CSV_NAME)  # 구버전 호환
-        self.categories_xlsx_path = os.path.join(here, CATEGORIES_XLSX_NAME)
+        # 설정 폴더 — 쓰기 가능한 위치 자동 선택 (Program Files 같은 read-only 회피).
+        # 사용자가 '설정 폴더 변경' 으로 고른 경로가 있으면 그걸 우선.
+        self.data_dir = _resolve_data_dir()
+        self.options_xlsx_path = os.path.join(self.data_dir, OPTIONS_XLSX_NAME)
+        self.options_csv_path = os.path.join(self.data_dir, OPTIONS_CSV_NAME)  # 구버전 호환
+        self.categories_xlsx_path = os.path.join(self.data_dir, CATEGORIES_XLSX_NAME)
         self.categories = {}      # {서비스명_lower: (분류, 설명)}
         self.option_rows = []     # 옵션 파일에서 읽은 행
         self.option_vars = []     # [{"kind", "var", "row", "group"}, ...]
@@ -733,7 +817,9 @@ class NmapParserApp:
         self.services_table = parse_nmap_services(self.nmap_exe) if self.nmap_exe else {}
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.output_folder = tk.StringVar(value=os.path.join(here, ts))
+        # 스캔 산출 폴더 기본값 — 쓰기 가능한 data_dir 하위 타임스탬프 폴더.
+        # 사용자가 '출력 폴더' 버튼으로 자유롭게 바꿀 수 있음.
+        self.output_folder = tk.StringVar(value=os.path.join(self.data_dir, ts))
 
         self.scan_thread = None
         self.proc = None
@@ -871,6 +957,10 @@ class NmapParserApp:
                   bg="#e3f2fd").pack(side="left", padx=(12, 2))
         tk.Button(opt_mgr, text="categories.xlsx 열기 (Excel)",
                   command=self._open_categories_xlsx).pack(side="left", padx=2)
+        # 설정 파일 폴더 수동 지정 — 자동 생성이 막힌 경우 / 다른 위치에 둔 xlsx 를 쓰고 싶을 때.
+        tk.Button(opt_mgr, text="설정 폴더 변경...",
+                  command=lambda: self._relocate_config_dir(),
+                  bg="#fce4ec").pack(side="left", padx=(12, 2))
         self.options_status = tk.Label(opt_mgr, text="", fg="#555")
         self.options_status.pack(side="left", padx=12)
 
@@ -957,8 +1047,11 @@ class NmapParserApp:
                 try:
                     write_default_options_xlsx(self.options_xlsx_path)
                 except OSError as e:
+                    if self._offer_relocation_on_write_failure("options.xlsx", e):
+                        return
                     messagebox.showerror("options.xlsx 생성 실패",
-                        f"기본 옵션 파일을 만들 수 없습니다.\n원인: {e}\n경로: {self.options_xlsx_path}")
+                        f"기본 옵션 파일을 만들 수 없습니다.\n원인: {e}\n경로: {self.options_xlsx_path}\n\n"
+                        "상단의 '설정 폴더 변경' 버튼으로 쓰기 가능한 폴더를 지정할 수 있습니다.")
                     return
 
         rows, errors = load_options_xlsx(self.options_xlsx_path)
@@ -1148,8 +1241,11 @@ class NmapParserApp:
                 write_default_categories_xlsx(self.categories_xlsx_path)
             except OSError as e:
                 if not initial:
+                    if self._offer_relocation_on_write_failure("categories.xlsx", e):
+                        return
                     messagebox.showerror("categories.xlsx 생성 실패",
-                        f"분류 파일을 만들 수 없습니다.\n원인: {e}\n경로: {self.categories_xlsx_path}")
+                        f"분류 파일을 만들 수 없습니다.\n원인: {e}\n경로: {self.categories_xlsx_path}\n\n"
+                        "상단의 '설정 폴더 변경' 버튼으로 쓰기 가능한 폴더를 지정할 수 있습니다.")
                 self.categories = {}
                 return
         catmap, errors = load_categories_xlsx(self.categories_xlsx_path)
@@ -1165,6 +1261,8 @@ class NmapParserApp:
             try:
                 write_default_categories_xlsx(self.categories_xlsx_path)
             except OSError as e:
+                if self._offer_relocation_on_write_failure("categories.xlsx", e):
+                    return
                 messagebox.showerror("열기 실패", f"파일을 만들 수 없습니다: {e}")
                 return
         try:
@@ -1188,6 +1286,8 @@ class NmapParserApp:
             try:
                 write_default_options_xlsx(self.options_xlsx_path)
             except OSError as e:
+                if self._offer_relocation_on_write_failure("options.xlsx", e):
+                    return
                 messagebox.showerror("열기 실패", f"파일을 만들 수 없습니다: {e}")
                 return
         try:
@@ -1195,6 +1295,70 @@ class NmapParserApp:
         except OSError as e:
             messagebox.showerror("열기 실패",
                 f"파일 연결 프로그램으로 열 수 없습니다.\n원인: {e}\n경로: {self.options_xlsx_path}")
+
+    # ----------------------------- 설정 파일 폴더 변경 (수동 지정 / 수동 생성)
+    def _relocate_config_dir(self, prompt_reason=None):
+        """설정 폴더(`options.xlsx` / `categories.xlsx` 위치) 직접 지정.
+
+        - 쓰기 가능한 폴더만 허용.
+        - 폴더 안에 기존 xlsx 가 있으면 그대로 사용, 없으면 기본값으로 새로 만듦.
+        - 선택 결과는 `_user_data_dir()/data_dir.txt` 에 저장 → 다음 실행 시 자동 적용.
+        """
+        title = "설정 파일 폴더 선택 (options.xlsx / categories.xlsx 위치)"
+        if prompt_reason:
+            messagebox.showinfo("설정 폴더 선택 안내",
+                f"{prompt_reason}\n\n다음 창에서 쓰기 가능한 폴더를 직접 선택하세요.\n"
+                "폴더에 기존 xlsx 가 있으면 그대로 사용하고, 없으면 기본값으로 새로 만듭니다.")
+        initial = self.data_dir if os.path.isdir(self.data_dir) else _user_data_dir()
+        folder = filedialog.askdirectory(title=title, initialdir=initial)
+        if not folder:
+            return False
+        if not _is_dir_writable(folder):
+            messagebox.showerror("쓰기 불가",
+                f"선택한 폴더에 파일을 쓸 수 없습니다.\n{folder}\n\n다른 폴더를 선택하세요.")
+            return False
+
+        new_options = os.path.join(folder, OPTIONS_XLSX_NAME)
+        new_categories = os.path.join(folder, CATEGORIES_XLSX_NAME)
+        new_options_csv = os.path.join(folder, OPTIONS_CSV_NAME)
+
+        try:
+            if not os.path.isfile(new_options) and not os.path.isfile(new_options_csv):
+                write_default_options_xlsx(new_options)
+            if not os.path.isfile(new_categories):
+                write_default_categories_xlsx(new_categories)
+        except OSError as e:
+            messagebox.showerror("기본 파일 생성 실패",
+                f"{folder} 에 기본 xlsx 를 만들 수 없습니다.\n원인: {e}")
+            return False
+
+        self.data_dir = folder
+        self.options_xlsx_path = new_options
+        self.options_csv_path = new_options_csv
+        self.categories_xlsx_path = new_categories
+        _write_pinned_data_dir(folder)
+
+        # 즉시 재로드
+        self._reload_categories(initial=False)
+        self._reload_options(initial=False)
+        messagebox.showinfo("설정 폴더 변경 완료",
+            f"설정 폴더가 다음으로 변경되었습니다:\n{folder}\n\n다음 실행 시에도 이 위치가 자동으로 사용됩니다.")
+        return True
+
+    def _offer_relocation_on_write_failure(self, what, err):
+        """xlsx 자동 생성/쓰기 실패 시 사용자에게 폴더 변경 제안.
+
+        Returns True 이면 사용자가 폴더 변경에 응했고 처리 완료(호출자는 추가 에러 표시 X).
+        """
+        ans = messagebox.askyesno(
+            f"{what} 생성/쓰기 실패",
+            f"현재 폴더에 파일을 만들 수 없습니다.\n경로: {self.data_dir}\n원인: {err}\n\n"
+            f"쓰기 가능한 다른 폴더를 직접 지정하시겠습니까?\n"
+            f"(취소하면 작업이 중단됩니다.)"
+        )
+        if not ans:
+            return False
+        return self._relocate_config_dir(prompt_reason=f"{what} 자동 생성에 실패했습니다.")
 
     # ----------------------------- nmap detect button
     def _refresh_nmap_button(self):
