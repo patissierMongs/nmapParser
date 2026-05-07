@@ -20,7 +20,7 @@
 
 **Option A — `.exe` 한 파일 (Python 불필요)**
 1. nmap 설치: <https://nmap.org/download.html>
-2. [Releases](https://github.com/patissierMongs/nmapParser/releases/latest) 에서 `nmapParser.exe` 다운로드
+2. [Releases](https://github.com/patissierMongs/nmapParser/releases/latest) 에서 `nmapParser.exe` 다운로드 (x86 빌드 — 32/64-bit Windows 모두 실행 가능)
 3. 더블클릭. 첫 실행 시 `options.xlsx` / `categories.xlsx` 자동 생성
 
 **Option B — 소스에서**

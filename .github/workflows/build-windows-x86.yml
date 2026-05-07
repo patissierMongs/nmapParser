@@ -1,0 +1,47 @@
+name: build-windows-x86
+
+# x86(32-bit) PyInstaller onefile 빌드.
+# 결과물은 64-bit Windows 에서도 WoW64 로 그대로 동작 → 단일 .exe 로 통일.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python (x86)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: "x86"
+
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+
+      - name: Build x86 onefile exe
+        run: pyinstaller --onefile --noconsole --name nmapParser nmapParser.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nmapParser-x86
+          path: dist/nmapParser.exe
+          if-no-files-found: error
+
+      - name: Publish release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/nmapParser.exe

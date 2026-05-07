@@ -30,12 +30,33 @@ from xml.sax.saxutils import escape as xml_escape
 # 허용: \t (\x09), \n (\x0a), \r (\x0d). 그 외 \x00-\x08, \x0b, \x0c, \x0e-\x1f 모두 제거.
 _XML_INVALID_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
+# read_xlsx 보호 한계치. 정상 OOXML xlsx 파트는 한 개당 수 MB 미만,
+# 합쳐도 수십 MB 를 넘지 않음. 악의적 zip-bomb / 비정상 파일 거부용.
+_MAX_XLSX_PART_BYTES = 64 * 1024 * 1024     # 단일 파트 64MB
+_MAX_XLSX_TOTAL_BYTES = 256 * 1024 * 1024   # 모든 파트 합 256MB
+
+# OOXML 정상 xlsx 는 DOCTYPE / 외부 엔티티를 쓰지 않음.
+# entity expansion (billion-laughs) DoS 차단을 위해 사전 거부.
+_DOCTYPE_RE = re.compile(rb"<!DOCTYPE", re.IGNORECASE)
+_ENTITY_RE = re.compile(rb"<!ENTITY", re.IGNORECASE)
+
 
 def _sanitize_xml_text(s):
     """XML 1.0 invalid control char 제거. None 은 빈 문자열로."""
     if s is None:
         return ""
     return _XML_INVALID_RE.sub("", str(s))
+
+
+def _safe_parse_xlsx_part(data):
+    """xlsx 내부 XML 파트를 안전하게 파싱.
+
+    DOCTYPE/ENTITY 선언이 들어 있으면 거부 (정상 OOXML 에는 존재하지 않음).
+    이를 통해 entity expansion 류 DoS 를 사전 차단.
+    """
+    if _DOCTYPE_RE.search(data) or _ENTITY_RE.search(data):
+        raise ValueError("xlsx 파일이 DOCTYPE/ENTITY 선언을 포함하고 있어 거부했습니다.")
+    return ET.fromstring(data)
 
 
 # ---------------------------------------------------------------- helpers
@@ -293,12 +314,23 @@ def read_xlsx(path):
     """
     rows = []
     with zipfile.ZipFile(path, "r") as z:
+        # zip-bomb / 비정상 파일 거부 — 압축 해제 크기 합산 검사.
+        total = 0
+        for info in z.infolist():
+            if info.file_size > _MAX_XLSX_PART_BYTES:
+                raise ValueError(
+                    f"xlsx 내부 파트 크기 초과: {info.filename} ({info.file_size} bytes)"
+                )
+            total += info.file_size
+            if total > _MAX_XLSX_TOTAL_BYTES:
+                raise ValueError(f"xlsx 전체 압축 해제 크기 초과: {total} bytes")
+
         names = set(z.namelist())
 
         # shared strings 표 (사용자가 Excel 로 편집 후 저장하면 등장)
         shared = []
         if "xl/sharedStrings.xml" in names:
-            ss_root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+            ss_root = _safe_parse_xlsx_part(z.read("xl/sharedStrings.xml"))
             for si in ss_root.findall(NS_MAIN + "si"):
                 # rich text 도 합쳐서 하나의 문자열로
                 texts = []
@@ -315,7 +347,7 @@ def read_xlsx(path):
         if not sheet_paths:
             return []
         sheet_path = sorted(sheet_paths)[0]
-        sheet_root = ET.fromstring(z.read(sheet_path))
+        sheet_root = _safe_parse_xlsx_part(z.read(sheet_path))
 
         sheet_data = sheet_root.find(NS_MAIN + "sheetData")
         if sheet_data is None:

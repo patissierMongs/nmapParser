@@ -20,7 +20,7 @@
 
 **Option A — standalone `.exe` (no Python)**
 1. Install nmap: <https://nmap.org/download.html>
-2. Download `nmapParser.exe` from [Releases](https://github.com/patissierMongs/nmapParser/releases/latest)
+2. Download `nmapParser.exe` from [Releases](https://github.com/patissierMongs/nmapParser/releases/latest) (x86 build — runs on both 32-bit and 64-bit Windows)
 3. Double-click. `options.xlsx` / `categories.xlsx` auto-created on first run.
 
 **Option B — from source**
