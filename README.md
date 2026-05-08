@@ -11,7 +11,7 @@
 ## 30초 요약
 
 1. **타깃 입력 → ▶ 스캔 시작.** GUI default 가 사용자 점검 표준 (`phase1`) 명령을 그대로 조립합니다.
-2. **결과 CSV 23컬럼.** 호스트/OS/프로토콜·표준포트·식별·**위험도(상/중/하)**·암호화·인증·분류·용도·노출위험·공격표면·**출처(KISA/CIS/MITRE)**·점검메모 까지 한 행에 — Excel 로 열어 `위험도=상` 필터 한 번에 우선순위 추림.
+2. **결과 CSV 24컬럼.** 호스트/OS/프로토콜·표준포트·식별·**위험도(상/중/하)**·암호화·인증·분류·용도·노출위험·공격표면·**출처(KISA/국정원/CIS/MITRE)**·**NSE추출(TLS_CN/SMB_OS/NTLM_Computer 등 핵심 필드 한 줄)**·점검메모 까지 한 행에 — Excel 로 열어 `위험도=상` 필터 한 번에 우선순위 추림.
 3. **옵션은 Excel 로 관리.** `options.xlsx` / `categories.xlsx` 행 추가만 하면 GUI 가 바로 반영.
 
 ![CSV 결과 예시](./screenshot_csv_sample.png)
@@ -46,12 +46,14 @@ python nmapParser.py    # 또는 nmapParser.bat
 
 - **한국어 GUI + 옵션마다 hover 툴팁.**
 - **체크박스 + 라디오 그룹** (TCP 스캔 타입 / 속도 — 같은 그룹 = 택1).
-- **`phase1` 표준 명령 default.** SYN+버전식별+UDP 26포트+NSE 19개 한 번에.
+- **`phase1` 표준 명령 default.** SYN+버전식별+UDP 26포트+NSE 27개 한 번에.
+- **NSE 추출.** 19개 NSE 스크립트 (ssl-cert, smb-os-discovery, rdp-ntlm-info, http-server-header 등) 의 핵심 필드 (TLS_CN, SMB_OS, NTLM_Computer, SSH_FP_SHA256 …) 를 CSV `NSE추출` 컬럼에 자동 추출.
+- **시간축 보고서.** `📊 시간축 보고서` 버튼 — CSV 폴더의 여러 시점 결과를 5(또는 6)시트 xlsx (현황/히트맵/변경이력/위험도추이/메타/NSE상세) 로 합치고 셀 색칠 (신규=빨강, 유지=하늘, 닫힘=자주, 미관측=회색).
 - **다중 `-p` 자동 합치기.** TCP 풀 + UDP 행 둘 다 켜도 단일 `-p T:...,U:...`.
 - **실시간 로그** (최근 275줄 화면 / 전체는 `.log` 파일) + `--stats-every 1m` 자동 추가로 buffer 멈춤 방지.
 - **창 닫기 시 nmap 자동 종료** (좀비 프로세스 방지).
 
-## CSV 23컬럼
+## CSV 24컬럼
 
 | # | 컬럼 | 의미 |
 |---|---|---|
@@ -64,20 +66,22 @@ python nmapParser.py    # 또는 nmapParser.bat
 | 13 | **위험도** | `상` / `중` / `하` (KISA 한국식) |
 | 14–15 | **암호화 / 인증** | `평문` / `TLS` / `암호화` / `선택` + `익명가능` / `사용자` / `키` / `Kerberos` 등 |
 | 16–17 | **노출위험 / 공격표면** | 한 줄 사실 (예: "평문 인증으로 자격증명 노출", "EternalBlue (MS17-010), NTLM relay") |
-| 18 | **출처** | `KISA U-21, CIS 4.5, MITRE T1040` 등 표준 매핑 |
+| 18 | **출처** | `KISA U-21, 국정원 정보보안기본지침 제32조, CIS 4.5, MITRE T1040` 등 4종 매핑 |
 | 19 | **상세(제품/버전)** | `OpenSSH 9.6p1 Ubuntu...` verbose |
 | 20 | **비고** | 자동 요약 한 줄 — detail + NSE 핵심 (CN, OS, hostname, title) |
 | 21 | **NSE스크립트명** | 적용된 script id 들 (콤마, 한 포트 한 행) |
 | 22 | **스크립트출력** | `[id] output` 블록 줄바꿈 join |
-| 23 | **점검메모** | 빈 칸 — 점검자가 Excel 에서 손으로 채우는 용도 (자동 보존) |
+| 23 | **NSE추출** | `TLS_CN=foo; SMB_OS=Windows 10; NTLM_Computer=WIN01` 같은 핵심 필드 한 줄 — 19개 NSE 스크립트 출력에서 자동 추출 |
+| 24 | **점검메모** | 빈 칸 — 점검자가 Excel 에서 손으로 채우는 용도 (자동 보존) |
 
 ### 위험도·노출위험·공격표면·출처 — 데이터 출처 우선순위
 
 `categories.xlsx` 의 4 컬럼은 **객관적 관찰 사실**입니다 (조치/판단 X). 데이터 매핑 우선순위:
 
 1. **KISA** — "주요정보통신기반시설 취약점 분석·평가 상세 가이드" UNIX/Linux (U-01~U-72), Windows (W-01~W-72), ISMS-P 인증 기준, 행안부 전자정부 진단 기준, 금융보안원 시행세칙.
-2. **CIS Critical Security Controls v8** — Control 4 (Secure Configuration), 4.5/4.6/4.8/4.10 등.
-3. **MITRE ATT&CK** — T1021.001 (RDP) / T1021.002 (SMB) / T1190 (Exploit Public-Facing App) / T1133 (External Remote Services) 등 Technique ID.
+2. **국정원 (NIS)** — "정보보안기본지침" / "기술적 보호조치 지침" / "암호모듈 정책(KCMVP)". 한국 환경에서 흔한 telnet/ftp/SMB1/SNMP v1·v2/RDP/원격 자격증명 노출 등에 명시.
+3. **CIS Critical Security Controls v8** — Control 4 (Secure Configuration), 4.5/4.6/4.8/4.10 등.
+4. **MITRE ATT&CK** — T1021.001 (RDP) / T1021.002 (SMB) / T1190 (Exploit Public-Facing App) / T1133 (External Remote Services) 등 Technique ID.
 
 기본 제공 105 서비스 모두 KISA U/W 항목 + CIS Control + MITRE Technique ID 매핑 완료.
 
@@ -164,8 +168,12 @@ nmap -Pn -n -sS -sU -sV --version-all \
      --script 'http-headers,http-server-header,http-title,ssh-hostkey,
                ssl-cert,ssl-enum-ciphers,tls-alpn,
                ms-sql-info,oracle-tns-version,rdp-ntlm-info,
-               snmp-info,ike-version,sip-methods,ntp-info,
+               snmp-info,ike-version,sip-methods,ntp-info,ntp-monlist,
                nbstat,smb-os-discovery,smb-protocols,rpcinfo,
+               dns-nsid,dns-recursion,
+               ftp-anon,ftp-syst,
+               telnet-encryption,
+               vnc-info,vnc-title,
                fingerprint-strings' \
      -T4 --max-retries 2 --reason --open --defeat-rst-ratelimit \
      -oA phase1 <대역>
@@ -173,25 +181,66 @@ nmap -Pn -n -sS -sU -sV --version-all \
 
 ## 변경 이력
 
-<details>
-<summary><b>v0.2 — 안정성 (현재)</b></summary>
+<details open>
+<summary><b>v0.4.0 — 시간축 보고서 + NSE 추출 (작업 중)</b></summary>
 
-- 좀비 nmap 방지 (창 닫기 시 자식 프로세스 정리)
-- 스캔 중지 시 친절 popup (XML ParseError 안 뜸)
-- 다중 `-p` 자동 합치기
-- xlsx XML invalid control char sanitize
-- IP octet 검증 (`192.168.1.999` 거부)
-- styles.xml OOXML strict 준수 (openpyxl 경고 0)
-- CSV 에 식별/비고 컬럼 추가 (12컬럼)
+- **CSV 24컬럼** — 23번째 `NSE추출` 추가. ssl-cert/smb-os-discovery/rdp-ntlm-info/http-server-header 등 19개 NSE 출력에서 핵심 필드 (TLS_CN / TLS_SAN / TLS_Issuer / TLS_NotAfter / TLS_SelfSigned / SMB_OS / SMB_Computer / SMB_Domain / SMB_HasV1 / NTLM_Hostname / NTLM_Computer / NTLM_OS_Build / SSH_FP_SHA256 / SSH_KeyTypes / HTTP_Server / HTTP_Title / NetBIOS_Computer / NetBIOS_MAC / SNMP_sysDescr / IKE_Version / NTP_Stratum / MSSQL_Version / Oracle_Version / SIP_Methods / RPC_Programs / Raw_FirstLine) 자동 추출.
+- **5(또는 6)시트 xlsx 보고서** — `📊 시간축 보고서` 버튼 / `--report --csv-folder <폴더>` CLI. 시트: 현황 / 히트맵 (셀 색칠) / 변경이력 / 위험도추이 / 메타 / NSE상세.
+- **diff 색칠 xlsx** — `--out-format xlsx|csv|both` (default both). NEW_OPEN 빨강 / CLOSED 자주 / CHANGED 노랑 / UNCHANGED 흰색 자동 색칠. CSV 결과는 그대로 유지.
+- **categories.xlsx 13컬럼 마이그레이션 prompt** — 시작 시 헤더 검사 → 부족하면 popup. Yes 면 사용자 편집·추가 컬럼 모두 보존하면서 13컬럼 schema 로 변환. 백업 자동 (.bak.<timestamp>).
+- **options.xlsx 새 옵션 자동 추가 prompt** — DEFAULT_OPTIONS 와 비교, 누락된 옵션이면 popup. Yes 면 활성=0 으로 추가 (사용자 결정 보존). 사용자 추가 행/컬럼 100% 보존.
+- **국정원 (NIS) 출처 매핑** — `SERVICE_EXPOSURE_GUIDE` 의 출처 컬럼에 한국 환경 흔한 항목 (telnet/ftp/SMB1/SNMP/RDP/SSH/HTTPS/MSSQL 등) 에 국정원 정보보안기본지침·기술적보호조치·암호모듈 정책(KCMVP) 인용 추가. 출처 4종 매핑 (KISA + 국정원 + CIS + MITRE).
+- **다음 정도 보강**: GUI override + GUI targets 자동 합치기 (override 박스에 `-iL`/IP 명시 안 되면 GUI 타겟 append). CSV 취합 dedup (hash + 이전 `_collected_` 폴더 제외). preflight 강화 (xlsx_io / nse_extract / report_generator 추가). `_relocate_config_dir` None-safety.
+- 테스트 37 → 추가 (test_nse_extract / test_report_generator). py_compile 통과.
+</details>
+
+<details>
+<summary><b>v0.3.1 — 회사 환경 호환 + 회귀 fix</b></summary>
+
+- **회귀 fix** (`fix(scan): regression — restore bufsize=0 + conditional cwd, raise watchdog thresholds`):
+  - `bufsize=0` 으로 복귀 (v0.2 기본값). `bufsize=-1` 은 OS full-buffer 로 nmap stdout 이 갇혀 GUI 가 수십 초 무응답 + watchdog 헛 경보.
+  - `cwd` 기본 `None` (parent inherit). UNC 경로(`\\server\share`) 가 cmd 안에 있을 때만 tempdir 폴백. 무조건 tempdir 강제는 일부 환경에서 권한·접근 이슈로 회귀 유발.
+  - Watchdog hint 5초→30초, warn 30초→90초, tick 5초→15초 — nmap 의 정상 phase 전환·NSE 로딩 30초+ 무출력 케이스 흡수.
+- **BEL/control char strip** — `_LOG_CTRL_CHAR_RE` 로 nmap stdout 의 `\x07` (BEL) / 기타 invalid control char 제거. tk Text 의 system sound 폭주 방지.
+- **atomic xlsx write** — tempfile + os.replace 로 쓰기 도중 UNC 끊김 / 디스크 가득참 / Excel 잠금에서 원본 손상 방지.
+- **shutil.which** 로 nmap 자동 검색 5단계 (env var → 등록 path → PROGRAMFILES → which → C:\Program Files\Nmap).
+- **빨간 배너** — 비관리자 모드에서 `-sS` / `-O` 사용 시 화면 상단 빨간 배너로 명시 (IsUserAnAdmin).
+- **📂 CSV 취합 버튼** — recursive `*.csv` 수집, `_collected_<ts>/` 새 폴더, hash dedup.
+- **UPX=False** — AV 시그니처 회피.
+</details>
+
+<details>
+<summary><b>v0.3.0 — KISA-first 데이터 + diff CLI/GUI</b></summary>
+
+- **CSV 19컬럼 → 23컬럼** (식별/분류/용도/위험도/암호화/인증/노출위험/공격표면/출처/상세/비고/NSE/출력/점검메모).
+- **위험도 (상/중/하)** 한국식 enum.
+- **categories.xlsx 13컬럼** (서비스명/표준포트/프로토콜/분류/용도/위험도/암호화/인증/노출위험/공격표면/출처/설명/점검메모). 헤더 이름 기반 reader — 사용자 컬럼 자유 reorder + 추가 컬럼 보존.
+- **`--diff` CLI + `기준/현재 비교` GUI 버튼** — base/curr CSV(또는 XML) → diff/summary/snapshot 3개 CSV. UNCHANGED 필터 옵션.
+- **`--xml2csv` CLI** — 일괄 XML → CSV 변환.
+- **override 모드** — 직접 nmap 명령 입력. 다른 GUI 옵션 무시 (단 `-oA` 는 우리 prefix 강제).
+- **UDP 마스터 토글** — 한 번에 `-sU` / `U:` 옵션 일괄 활성/비활성.
+- **NSE 마스터 토글** — `[✓ 스크립트 사용]` / `[전부 해제]`.
+</details>
+
+<details>
+<summary><b>v0.2 — 안정성</b></summary>
+
+- 좀비 nmap 방지 (창 닫기 시 자식 프로세스 정리).
+- 스캔 중지 시 친절 popup (XML ParseError 안 뜸).
+- 다중 `-p` 자동 합치기.
+- xlsx XML invalid control char sanitize.
+- IP octet 검증 (`192.168.1.999` 거부).
+- styles.xml OOXML strict 준수 (openpyxl 경고 0).
+- CSV 에 식별/비고 컬럼 추가 (12컬럼).
 </details>
 
 <details>
 <summary><b>v0.1 — 첫 릴리즈</b></summary>
 
-- Windows 단독 실행 `.exe` (PyInstaller, ~10.7 MB)
-- 10컬럼 CSV (IP/PORT/포트상태/추측·확인서비스/분류/용도/상세/NSE)
-- options.xlsx 5컬럼 + categories.xlsx 4컬럼 Excel 편집
-- 라디오 그룹 + 체크박스 grid + 한국어 툴팁
+- Windows 단독 실행 `.exe` (PyInstaller, ~10.7 MB).
+- 10컬럼 CSV (IP/PORT/포트상태/추측·확인서비스/분류/용도/상세/NSE).
+- options.xlsx 5컬럼 + categories.xlsx 4컬럼 Excel 편집.
+- 라디오 그룹 + 체크박스 grid + 한국어 툴팁.
 </details>
 
 ## 회사 보안 환경 / 네트워크 드라이브 / AppLocker
@@ -242,7 +291,7 @@ nmap -Pn -n -sS -sU -sV --version-all \
 | `Starting Nmap` 안 보이고 멈춰 보임 | Python 버전 차이로 stdout `read1` 없음 | v0.2 `a045f58` 에서 fix. 최신 .exe 사용 |
 | AppLocker / GPO 가 사용자 폴더 .exe 차단 | 정책 | IT 에 화이트리스트 요청. 또는 PowerShell 으로 `python nmapParser.py` 실행 |
 | 한국어 사용자명 폴더 (`C:\Users\홍길동\`) + `--onefile` | PyInstaller _MEI 임시 풀기 시 한글 path 일부 버전 이슈 | `--onedir` zip 사용 권장 |
-| UNC / 네트워크 드라이브 위에서 실행 시 nmap 출력 stall | nmap 의 cwd 가 UNC 면 IO 차단 가능 | v0.3.1+ 는 Popen `cwd=tempdir` 강제 — 자동 회피 |
+| UNC / 네트워크 드라이브 위에서 실행 시 nmap 출력 stall | nmap 의 cwd 가 UNC 면 IO 차단 가능 | v0.3.1+ 는 cwd 기본 `None` (부모 inherit, v0.2 동작), 명령에 UNC (`\\server\share`) 가 들어 있을 때만 자동으로 `tempdir` 폴백. 무조건 tempdir 강제는 일부 환경 권한 이슈로 회귀 유발해서 v0.3.1 에서 조건부로 변경 |
 | DLP 가 옵션 xlsx 차단 | 정책 | `NMAPPARSER_DATA_DIR` 환경변수로 허용된 폴더 강제 지정 |
 
 ## 한계

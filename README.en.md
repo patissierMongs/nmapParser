@@ -46,12 +46,15 @@ python nmapParser.py    # or nmapParser.bat
 
 - **Korean GUI + hover tooltip** on every option.
 - **Checkboxes + radio groups** (TCP scan type / speed — same group = pick one).
-- **`phase1` standard default.** SYN + version detect + 26 UDP ports + 19 NSE in one command.
+- **`phase1` standard default.** SYN + version detect + 26 UDP ports + 27 NSE scripts in one command.
+- **NSE field extraction.** 19 NSE scripts (ssl-cert, smb-os-discovery, rdp-ntlm-info, http-server-header, …) are parsed into key fields (`TLS_CN`, `SMB_OS`, `NTLM_Computer`, `SSH_FP_SHA256`, …) and emitted as the `NSE추출` CSV column.
+- **Time-axis report.** `📊 Time-axis report` button — merges multiple CSVs from a folder into a 5-or-6-sheet xlsx (Status / Heatmap / Change-history / Risk-trend / Meta / NSE-detail) with per-cell color fills (new=red, kept=blue, closed=purple, unobserved=gray).
+- **Diff xlsx with colors.** `--out-format xlsx|csv|both` (default `both`). NEW_OPEN=red / CLOSED=purple / CHANGED=yellow rows in the xlsx; CSV outputs preserved.
 - **Auto `-p` merge.** Both TCP-full and UDP rows ON → single `-p T:...,U:...`.
 - **Live log** (last 275 lines on screen, full output to `.log` file) + auto `--stats-every 1m` to defeat stdout buffering.
 - **Window-close kills nmap** — no zombie processes.
 
-## CSV — 23 columns
+## CSV — 24 columns
 
 | # | Column | Meaning |
 |---|---|---|
@@ -64,20 +67,22 @@ python nmapParser.py    # or nmapParser.bat
 | 13 | 위험도 | `상` / `중` / `하` (KISA-style) |
 | 14–15 | 암호화 / 인증 | `평문` / `TLS` / `암호화` / `선택` + `익명가능` / `사용자` / `키` / `Kerberos` etc. |
 | 16–17 | 노출위험 / 공격표면 | one-line facts |
-| 18 | 출처 | `KISA U-21, CIS 4.5, MITRE T1040` style reference |
+| 18 | 출처 | `KISA U-21, 국정원 정보보안기본지침 제32조, CIS 4.5, MITRE T1040` — 4-source mapping |
 | 19 | 상세(제품/버전) | verbose — `OpenSSH 9.6p1 Ubuntu...` |
 | 20 | 비고 | one-line summary — detail + NSE key (CN, OS, hostname, title) |
 | 21 | NSE스크립트명 | comma-joined script ids (one row per port) |
 | 22 | 스크립트출력 | `[id] output` blocks newline-joined |
-| 23 | 점검메모 | empty — for the reviewer to fill in Excel (preserved across runs) |
+| 23 | NSE추출 | `TLS_CN=foo; SMB_OS=Windows 10; NTLM_Computer=WIN01` — auto-extracted from 19 NSE scripts |
+| 24 | 점검메모 | empty — for the reviewer to fill in Excel (preserved across runs) |
 
 ### Risk / exposure / attack-surface / source — data priority
 
 The 4 columns are **observational facts only** (no judgment / remediation). Mapping priority:
 
 1. **KISA** — Korea Internet & Security Agency "취약점 분석·평가 상세 가이드" UNIX/Linux (U-01~U-72), Windows (W-01~W-72), ISMS-P, MOIS e-Government, KFSI rules.
-2. **CIS Critical Security Controls v8** — Control 4 (Secure Configuration), 4.5/4.6/4.8/4.10 etc.
-3. **MITRE ATT&CK** — Technique IDs (T1021.001 RDP / T1021.002 SMB / T1190 / T1133 etc).
+2. **국정원 (NIS)** — National Intelligence Service "정보보안기본지침" / "기술적 보호조치 지침" / KCMVP. Cited for items common in Korean inspection (telnet/ftp/SMB1/SNMP v1·v2/RDP/cleartext credentials).
+3. **CIS Critical Security Controls v8** — Control 4 (Secure Configuration), 4.5/4.6/4.8/4.10 etc.
+4. **MITRE ATT&CK** — Technique IDs (T1021.001 RDP / T1021.002 SMB / T1190 / T1133 etc).
 
 105 services shipped with full KISA-U/W + CIS Control + MITRE Technique ID mapping.
 
@@ -116,8 +121,12 @@ nmap -Pn -n -sS -sU -sV --version-all \
      --script 'http-headers,http-server-header,http-title,ssh-hostkey,
                ssl-cert,ssl-enum-ciphers,tls-alpn,
                ms-sql-info,oracle-tns-version,rdp-ntlm-info,
-               snmp-info,ike-version,sip-methods,ntp-info,
+               snmp-info,ike-version,sip-methods,ntp-info,ntp-monlist,
                nbstat,smb-os-discovery,smb-protocols,rpcinfo,
+               dns-nsid,dns-recursion,
+               ftp-anon,ftp-syst,
+               telnet-encryption,
+               vnc-info,vnc-title,
                fingerprint-strings' \
      -T4 --max-retries 2 --reason --open --defeat-rst-ratelimit \
      -oA phase1 <TARGET>
@@ -125,25 +134,64 @@ nmap -Pn -n -sS -sU -sV --version-all \
 
 ## Changelog
 
-<details>
-<summary><b>v0.2 — stability (current)</b></summary>
+<details open>
+<summary><b>v0.4.0 — time-axis report + NSE extraction (in progress)</b></summary>
 
-- No more zombie nmap on window close
-- Stop-button shows a friendly popup (no XML ParseError)
-- Multi `-p` auto-merge
-- xlsx XML-invalid control-char sanitize
-- IP octet validation (`192.168.1.999` rejected)
-- styles.xml OOXML-strict (openpyxl: zero warnings)
-- 12-column CSV (식별/비고 added)
+- **24-column CSV** — added `NSE추출` (NSE-extract) column. 19 NSE outputs (ssl-cert / smb-os-discovery / rdp-ntlm-info / http-server-header / ssh-hostkey / nbstat / snmp-info / ike-version / ntp-info / sip-methods / ms-sql-info / oracle-tns-version / rpcinfo / fingerprint-strings / tls-alpn / ssl-enum-ciphers / http-headers / http-title / smb-protocols) parsed into key fields (TLS_CN, TLS_SAN, TLS_Issuer, TLS_NotAfter, TLS_SelfSigned, SMB_OS, SMB_Computer, SMB_Domain, SMB_HasV1, NTLM_Computer, NTLM_OS_Build, SSH_FP_SHA256, SSH_KeyTypes, HTTP_Server, HTTP_Title, SNMP_sysDescr, IKE_Version, NTP_Stratum, MSSQL_Version, …).
+- **5-or-6-sheet xlsx report** — `📊 Time-axis report` button / `--report --csv-folder <path>` CLI. Sheets: Status / Heatmap (color-filled cells) / Change-history / Risk-trend / Meta / NSE-detail.
+- **Diff color xlsx** — `--out-format xlsx|csv|both` (default `both`). NEW_OPEN red / CLOSED purple / CHANGED yellow / UNCHANGED white.
+- **categories.xlsx 13-column migration prompt** — header check at startup; missing cols → popup. Yes preserves user edits + custom columns; auto-backup.
+- **options.xlsx new-option auto-add prompt** — compares to DEFAULT_OPTIONS; missing → popup. Yes inserts as `enabled=0` (user decides).
+- **NIS (국정원) source citations** — KCMVP / Information Security Basic Guideline / Technical Safeguards Guideline added to the 출처 column. 4-source mapping (KISA + NIS + CIS + MITRE).
+- Misc: GUI override + GUI targets auto-merge, CSV collection dedup (hash + skip prior `_collected_/`), preflight strengthened, `_relocate_config_dir` None-safety.
+- Tests 37 passing (test_nse_extract / test_report_generator added).
+</details>
+
+<details>
+<summary><b>v0.3.1 — corporate hardening + regression fix</b></summary>
+
+- **Regression fix** (`fix(scan): regression — restore bufsize=0 + conditional cwd, raise watchdog thresholds`):
+  - `bufsize=0` restored (v0.2 default). `bufsize=-1` left nmap stdout in OS full-buffer → GUI looked frozen for tens of seconds + watchdog false alarm.
+  - `cwd` now defaults to `None` (parent inherit). Falls back to `tempdir` only when an UNC path (`\\server\share`) is detected in the command.
+  - Watchdog hint 5s → 30s, warn 30s → 90s, tick 5s → 15s — absorbs nmap's normal phase transitions / NSE loading silence.
+- **BEL/control-char strip** — `\x07` and other invalid control chars stripped before tk Text insert; kills repeated Windows alert sound.
+- **Atomic xlsx write** — tempfile + os.replace; survives UNC drops / disk-full / Excel locks.
+- **shutil.which** auto-discover for nmap.
+- **Red banner** when running as non-admin and `-sS` / `-O` is selected.
+- **📂 CSV collection button** — recursive `*.csv` gather + hash dedup.
+- **UPX disabled** (AV signature avoidance).
+</details>
+
+<details>
+<summary><b>v0.3.0 — KISA-first data + diff CLI/GUI</b></summary>
+
+- **23-column CSV** (식별/분류/용도/위험도/암호화/인증/노출위험/공격표면/출처/상세/비고/NSE/출력/점검메모).
+- **위험도 (상/중/하)** Korean enum.
+- **categories.xlsx 13-column** schema. Header-name based reader — free column reordering + user custom columns preserved.
+- **`--diff` CLI + GUI button** — base/curr CSV(or XML) → diff/summary/snapshot triplet.
+- **`--xml2csv` CLI** — bulk XML→CSV.
+- **Override mode**, **UDP master toggle**, **NSE master toggle**.
+</details>
+
+<details>
+<summary><b>v0.2 — stability</b></summary>
+
+- No more zombie nmap on window close.
+- Stop-button shows a friendly popup (no XML ParseError).
+- Multi `-p` auto-merge.
+- xlsx XML-invalid control-char sanitize.
+- IP octet validation (`192.168.1.999` rejected).
+- styles.xml OOXML-strict (openpyxl: zero warnings).
+- 12-column CSV (식별/비고 added).
 </details>
 
 <details>
 <summary><b>v0.1 — first release</b></summary>
 
-- Standalone Windows `.exe` (PyInstaller onefile, ~10.7 MB)
-- 10-column CSV
-- options.xlsx (5 col) + categories.xlsx (4 col) Excel-editable
-- Radio groups + checkbox grid + Korean tooltips
+- Standalone Windows `.exe` (PyInstaller onefile, ~10.7 MB).
+- 10-column CSV.
+- options.xlsx (5 col) + categories.xlsx (4 col) Excel-editable.
+- Radio groups + checkbox grid + Korean tooltips.
 </details>
 
 ## Locked-down corp / network-drive / AppLocker environments
@@ -197,7 +245,7 @@ Common symptoms and fixes when running on locked-down corporate PCs:
 | "Starting Nmap" never shows, GUI looks frozen | Python build difference — stdout has no `read1` | Fixed in v0.2 (`a045f58`); use latest .exe |
 | AppLocker / GPO blocks user-folder .exe | policy | Whitelist request, or run `python nmapParser.py` via PowerShell |
 | Korean username path (`C:\Users\홍길동\`) + `--onefile` | PyInstaller `_MEI` extraction issue with non-ASCII path on some builds | Use `--onedir` zip |
-| nmap stdout stalls on UNC / mapped drive | nmap cwd on UNC can deadlock IO | v0.3.1+ forces Popen `cwd=tempdir` — auto-avoided |
+| nmap stdout stalls on UNC / mapped drive | nmap cwd on UNC can deadlock IO | v0.3.1+ uses `cwd=None` by default (parent inherit, v0.2 behavior) and falls back to `tempdir` only when an UNC path is detected in the command. Forcing tempdir unconditionally caused regressions in some setups, fixed in v0.3.1 |
 | DLP blocks option xlsx | policy | Set `NMAPPARSER_DATA_DIR` env var to a permitted folder |
 
 ## Limits
