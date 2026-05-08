@@ -141,6 +141,158 @@ class DiffEngineTests(unittest.TestCase):
             # 헤더만 남아야 함 (UNCHANGED는 필터링)
             self.assertEqual(len(lines), 1)
 
+    def test_parse_csv_rows_for_diff_korean_23col(self):
+        """도구가 실제로 출력하는 23컬럼 한국어 CSV 헤더에서 정상 파싱되는지 검증.
+        v0.4 회귀 방지 — port 컬럼이 '포트' (한국어) 인 케이스.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "korean.csv")
+            with open(p, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(
+                    "IP,호스트,OS,프로토콜,포트,표준포트,포트상태,추측서비스,확인서비스(short),"
+                    "식별,분류,용도,위험도,암호화,인증,노출위험,공격표면,출처,"
+                    "상세(제품/버전),비고,NSE스크립트명,스크립트출력,점검메모\n"
+                )
+                f.write(
+                    "10.0.0.1,host1,Linux,tcp,22,ssh,open,ssh,ssh,"
+                    "확인,원격접속,관리,중,SSH,비밀번호,약한비번,브루트포스,KISA U-01,"
+                    "OpenSSH 9.6,,,," "\n"
+                )
+                f.write(
+                    "10.0.0.1,host1,Linux,tcp,80,http,open,http,http,"
+                    "확인,웹,사용자,중,없음,없음,평문,XSS,KISA W-13,"
+                    "nginx 1.24,,,," "\n"
+                )
+            rows = np.parse_csv_rows_for_diff(p)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["ip"], "10.0.0.1")
+            self.assertEqual(rows[0]["proto"], "tcp")
+            self.assertEqual(rows[0]["port"], "22")
+            self.assertEqual(rows[0]["state"], "open")
+            self.assertEqual(rows[0]["service"], "ssh")
+            self.assertIn("OpenSSH", rows[0]["detail"])
+            ports = sorted(r["port"] for r in rows)
+            self.assertEqual(ports, ["22", "80"])
+
+    def test_run_cli_diff_korean_23col(self):
+        """23컬럼 한국어 CSV 두 개로 --diff 실행 시 결과 비어있지 않음."""
+        with tempfile.TemporaryDirectory() as td:
+            base = os.path.join(td, "base.csv")
+            curr = os.path.join(td, "curr.csv")
+            header = (
+                "IP,호스트,OS,프로토콜,포트,표준포트,포트상태,추측서비스,확인서비스(short),"
+                "식별,분류,용도,위험도,암호화,인증,노출위험,공격표면,출처,"
+                "상세(제품/버전),비고,NSE스크립트명,스크립트출력,점검메모\n"
+            )
+            with open(base, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(header)
+                f.write("10.0.0.1,h,Linux,tcp,22,ssh,open,ssh,ssh,확,원격,관리,중,SSH,비번,x,x,KISA,OpenSSH 9.6,,,,,\n")
+                f.write("10.0.0.1,h,Linux,tcp,80,http,open,http,http,확,웹,사용자,중,X,X,X,X,KISA,nginx 1.24,,,,,\n")
+            with open(curr, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(header)
+                f.write("10.0.0.1,h,Linux,tcp,22,ssh,open,ssh,ssh,확,원격,관리,중,SSH,비번,x,x,KISA,OpenSSH 9.7,,,,,\n")
+                f.write("10.0.0.1,h,Linux,tcp,443,https,open,https,https,확,웹,사용자,중,TLS,X,X,X,KISA,nginx 1.24,,,,,\n")
+
+            class Args:
+                pass
+            args = Args()
+            args.diff = True
+            args.base = base
+            args.curr = curr
+            args.out = td
+            args.asset = "HQ"
+            args.only_changes = True
+            rc = np.run_cli_diff(args)
+            self.assertEqual(rc, 0)
+
+            diff_files = sorted(glob.glob(os.path.join(td, "diff_*.csv")))
+            self.assertTrue(diff_files)
+            with open(diff_files[-1], "r", encoding="utf-8-sig") as f:
+                lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+            # 헤더 + 데이터 행 (CHANGED + NEW_OPEN + CLOSED 3행, only_changes=True 라 UNCHANGED 빠짐)
+            self.assertGreater(len(lines), 1, "diff 결과가 헤더만 — Korean 컬럼 파싱 실패 의심")
+
+    def test_diff_xlsx_with_colors(self):
+        """--out-format xlsx 또는 both 면 색칠된 xlsx 가 같이 생성되는지 검증."""
+        import zipfile
+        with tempfile.TemporaryDirectory() as td:
+            base = os.path.join(td, "base.csv")
+            curr = os.path.join(td, "curr.csv")
+            header = "IP,프로토콜,포트,포트상태,확인서비스(short),상세(제품/버전),스크립트출력\n"
+            with open(base, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(header)
+                f.write("10.0.0.1,tcp,22,open,ssh,OpenSSH 9.6,\n")
+                f.write("10.0.0.1,tcp,80,open,http,nginx 1.24,\n")
+            with open(curr, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(header)
+                f.write("10.0.0.1,tcp,22,open,ssh,OpenSSH 9.7,\n")  # CHANGED
+                f.write("10.0.0.1,tcp,443,open,https,nginx 1.24,\n")  # NEW_OPEN
+                # 80 → 빠짐 (CLOSED)
+
+            class Args:
+                pass
+            args = Args()
+            args.diff = True
+            args.base = base
+            args.curr = curr
+            args.out = td
+            args.asset = "HQ"
+            args.only_changes = False
+            args.out_format = "both"
+
+            rc = np.run_cli_diff(args)
+            self.assertEqual(rc, 0)
+
+            xlsx_files = glob.glob(os.path.join(td, "diff_*.xlsx"))
+            self.assertEqual(len(xlsx_files), 1, "diff xlsx 파일이 생성되지 않음")
+            xlsx_path = xlsx_files[0]
+
+            with zipfile.ZipFile(xlsx_path) as z:
+                names = z.namelist()
+                # 3개 시트 (Diff/Summary/Snapshot)
+                sheet_files = [n for n in names if n.startswith("xl/worksheets/sheet")]
+                self.assertEqual(len(sheet_files), 3)
+                # 색 확인 — styles.xml 안에 NEW_OPEN red, CHANGED yellow 들어 있어야
+                styles = z.read("xl/styles.xml").decode("utf-8")
+                self.assertIn("FFFFCDD2", styles)  # NEW_OPEN red
+                self.assertIn("FFFFF59D", styles)  # CHANGED yellow
+                self.assertIn("FFE1BEE7", styles)  # CLOSED 자주
+                # Diff 시트 (sheet1) 안에 색 인덱스 적용된 셀 존재
+                diff_xml = z.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                self.assertTrue(
+                    's="2"' in diff_xml or 's="4"' in diff_xml or 's="6"' in diff_xml,
+                    "Diff 시트에 NEW_OPEN/CLOSED/CHANGED 색이 적용되지 않음"
+                )
+
+    def test_diff_xlsx_only_format(self):
+        """--out-format xlsx 면 CSV 는 안 만들고 xlsx 만."""
+        with tempfile.TemporaryDirectory() as td:
+            base = os.path.join(td, "base.csv")
+            curr = os.path.join(td, "curr.csv")
+            header = "IP,프로토콜,포트,포트상태,확인서비스(short),상세(제품/버전),스크립트출력\n"
+            with open(base, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(header)
+                f.write("10.0.0.1,tcp,22,open,ssh,OpenSSH 9.6,\n")
+            with open(curr, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(header)
+                f.write("10.0.0.1,tcp,22,open,ssh,OpenSSH 9.7,\n")
+
+            class Args:
+                pass
+            args = Args()
+            args.diff = True
+            args.base = base
+            args.curr = curr
+            args.out = td
+            args.asset = "HQ"
+            args.only_changes = False
+            args.out_format = "xlsx"
+
+            rc = np.run_cli_diff(args)
+            self.assertEqual(rc, 0)
+            self.assertEqual(len(glob.glob(os.path.join(td, "diff_*.csv"))), 0)
+            self.assertEqual(len(glob.glob(os.path.join(td, "diff_*.xlsx"))), 1)
+
     def test_diff_raises_on_missing_file(self):
         class Args:
             pass
