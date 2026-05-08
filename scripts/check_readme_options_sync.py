@@ -9,8 +9,9 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PY_FILE = ROOT / "nmapParser.py"
-README_EN = ROOT / "README.md"
-README_KO = ROOT / "README.ko.md"
+# 한국어 README.md 가 메인. 영어는 README.en.md.
+README_KO = ROOT / "README.md"
+README_EN = ROOT / "README.en.md"
 
 
 def extract_default_options_count(src: str) -> int:

@@ -37,37 +37,32 @@ STD_COLUMNS = [
 ]
 
 
-def main():
-    if len(sys.argv) >= 2:
-        path = os.path.abspath(sys.argv[1])
-    else:
-        path = os.path.join(_ROOT, "categories.xlsx")
+def migrate_path(path):
+    """주어진 categories.xlsx 를 13컬럼 schema 로 마이그레이션.
 
+    Returns:
+        dict { 'status': 'ok'|'created'|'no_header'|'empty', 'backup': str|None,
+               'total': int, 'added': int, 'user_extra': list[str] }
+    """
     if not os.path.isfile(path):
         # 없으면 기본값으로 새로 만듦
-        print(f"[migrate] 파일 없음 — 기본값으로 새로 생성: {path}")
         nmapParser.write_default_categories_xlsx(path)
-        return 0
+        return {"status": "created", "backup": None, "total": len(nmapParser.DEFAULT_CATEGORIES),
+                "added": len(nmapParser.DEFAULT_CATEGORIES), "user_extra": []}
 
-    # 1) 원본 raw 읽기 (xlsx_io 직접) — 사용자 컬럼 보존을 위해.
-    try:
-        raw_rows = xlsx_io.read_xlsx(path)
-    except Exception as e:
-        print(f"[migrate] 읽기 실패: {e}")
-        return 1
+    raw_rows = xlsx_io.read_xlsx(path)
     if not raw_rows:
-        print("[migrate] 파일이 비어 있음 — 기본값으로 새로 생성")
         nmapParser.write_default_categories_xlsx(path)
-        return 0
+        return {"status": "empty", "backup": None, "total": len(nmapParser.DEFAULT_CATEGORIES),
+                "added": len(nmapParser.DEFAULT_CATEGORIES), "user_extra": []}
 
     raw_header = [(c or "").strip() for c in raw_rows[0]]
     raw_data = raw_rows[1:]
     raw_col_idx = {h: i for i, h in enumerate(raw_header) if h}
 
     if "서비스명" not in raw_col_idx:
-        print(f"[migrate] 필수 헤더 '서비스명' 없음. 현재 헤더: {raw_header}")
-        print("[migrate] 사용자 파일을 보존하려면 수동으로 '서비스명' 컬럼을 만든 뒤 다시 실행.")
-        return 1
+        return {"status": "no_header", "backup": None, "total": 0, "added": 0,
+                "user_extra": [], "current_header": raw_header}
 
     # 2) 새 헤더 = 권장 13컬럼 + 사용자가 추가한 비표준 컬럼 (순서 보존).
     user_extra = [h for h in raw_header if h and h not in STD_COLUMNS]
@@ -77,7 +72,6 @@ def main():
     ts = time.strftime("%Y%m%d-%H%M%S")
     backup = f"{path}.bak.{ts}"
     shutil.copy2(path, backup)
-    print(f"[migrate] 백업: {backup}")
 
     # 4) 기존 데이터 → 새 헤더 순서로 재배열. 표준 컬럼 빈 칸은 코드 dict 에서 보충.
     def get_cell(row, col_name):
@@ -148,11 +142,43 @@ def main():
     col_widths_std = [20, 9, 11, 14, 12, 8, 22, 22, 38, 38, 36, 38, 26]
     col_widths = col_widths_std + [20] * len(user_extra)
     xlsx_io.write_xlsx(path, new_rows, col_widths=col_widths)
-    print(f"[migrate] 13컬럼 schema 로 저장: {path}")
-    print(f"[migrate] 총 {len(new_rows)-1}행 (기존 {len(seen)-added}개 + 새로 추가 {added}개).")
-    if user_extra:
-        print(f"[migrate] 사용자 추가 컬럼 보존: {user_extra}")
-    return 0
+    return {
+        "status": "ok",
+        "backup": backup,
+        "total": len(new_rows) - 1,
+        "added": added,
+        "user_extra": user_extra,
+    }
+
+
+def main():
+    if len(sys.argv) >= 2:
+        path = os.path.abspath(sys.argv[1])
+    else:
+        path = os.path.join(_ROOT, "categories.xlsx")
+
+    result = migrate_path(path)
+    status = result["status"]
+    if status == "no_header":
+        print(f"[migrate] 필수 헤더 '서비스명' 없음. 현재 헤더: {result.get('current_header')}")
+        print("[migrate] 사용자 파일을 보존하려면 수동으로 '서비스명' 컬럼을 만든 뒤 다시 실행.")
+        return 1
+    if status == "created":
+        print(f"[migrate] 파일 없음 — 기본값으로 새로 생성: {path}")
+        return 0
+    if status == "empty":
+        print(f"[migrate] 파일이 비어 있음 — 기본값으로 새로 생성: {path}")
+        return 0
+    if status == "ok":
+        if result["backup"]:
+            print(f"[migrate] 백업: {result['backup']}")
+        print(f"[migrate] 13컬럼 schema 로 저장: {path}")
+        print(f"[migrate] 총 {result['total']}행 (새로 추가 {result['added']}개).")
+        if result["user_extra"]:
+            print(f"[migrate] 사용자 추가 컬럼 보존: {result['user_extra']}")
+        return 0
+    print(f"[migrate] 예상치 못한 상태: {status}")
+    return 1
 
 
 if __name__ == "__main__":

@@ -6,9 +6,13 @@ from __future__ import annotations
 import subprocess
 
 CHECKS = [
-    ["python", "-m", "py_compile", "nmapParser.py", "scripts/check_readme_cli_sync.py", "scripts/generate_service_checklist.py"],
+    ["python", "-m", "py_compile",
+     "nmapParser.py", "xlsx_io.py", "nse_extract.py", "report_generator.py",
+     "scripts/check_readme_cli_sync.py", "scripts/generate_service_checklist.py",
+     "scripts/migrate_categories_to_13col.py"],
     ["python", "scripts/check_readme_cli_sync.py"],
-    ["python", "-m", "unittest", "-q", "tests/test_diff_cli.py"],
+    ["python", "-m", "unittest", "-q",
+     "tests.test_diff_cli", "tests.test_nse_extract", "tests.test_report_generator"],
 ]
 
 
