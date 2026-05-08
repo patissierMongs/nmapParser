@@ -45,6 +45,13 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 # 동봉된 xlsx 헬퍼 (stdlib only)
 import xlsx_io
 
+# NSE 스크립트 출력에서 핵심 필드(TLS_CN, SMB_OS, NTLM_Computer ...) 를 추출하는 헬퍼.
+# 모듈이 없거나 import 실패해도 도구 동작은 멈추지 않고 NSE추출 컬럼만 빈 칸으로 둔다.
+try:
+    import nse_extract  # type: ignore
+except Exception:
+    nse_extract = None  # type: ignore
+
 
 # ============================================================ defaults / loaders
 
@@ -343,16 +350,19 @@ def _protocol_guide_for(key):
 
 # SERVICE_EXPOSURE_GUIDE — 4-tuple (위험도, 노출위험, 공격표면, 출처)
 #   위험도: 상 / 중 / 하 (KISA 한국식 enum)
-#   출처: KISA 점검 항목 + CIS Controls v8 + MITRE ATT&CK Technique ID
-#   1순위: KISA "주요정보통신기반시설 취약점 분석·평가 상세 가이드" (U-01~U-72, W-01~W-72)
-#   2순위: CIS Critical Security Controls v8, MITRE ATT&CK
+#   출처 우선순위 (한국 점검 환경 — 4종 매핑):
+#     1순위: KISA "주요정보통신기반시설 취약점 분석·평가 상세 가이드" (U-01~U-72, W-01~W-72)
+#     2순위: 국정원 "정보보안기본지침" / "기술적 보호조치 지침" / "암호모듈 정책(KCMVP)"
+#            (한국 환경에서 흔한 telnet/ftp/smb1/snmp v1/v2/RDP/원격 자격증명 노출 등에 명시)
+#     3순위: CIS Critical Security Controls v8
+#     4순위: MITRE ATT&CK Technique ID
 SERVICE_EXPOSURE_GUIDE = {
     # ---- 원격 접속
-    "ssh":           ("중", "약한 비밀번호/구버전 시 무차별 대입·CVE 악용 가능", "브루트포스, OpenSSH CVE (CVE-2024-6387 등), 키 관리 미흡", "KISA U-01, CIS 4.6, MITRE T1021.004"),
-    "telnet":        ("상", "평문 통신으로 자격증명·세션 정보 그대로 노출", "패킷 스니핑, 중간자 공격, 자격증명 탈취", "KISA U-21, CIS 4.5, MITRE T1040"),
-    "rdp":           ("상", "NLA 미적용 시 NTLM 정보 노출, BlueKeep 류 RCE 위험", "NTLM relay, BlueKeep, 무차별 대입", "KISA W-20, CIS 4.6, MITRE T1021.001"),
-    "ms-wbt-server": ("상", "NLA 미적용 시 NTLM challenge 응답으로 호스트명/도메인 노출, BlueKeep 류 RCE 위험", "NTLM relay, BlueKeep, 무차별 대입", "KISA W-20, CIS 4.6, MITRE T1021.001"),
-    "vnc":           ("상", "평문 인증·약한 비밀번호 시 화면 탈취 / 세션 하이재킹", "약한 인증, 세션 탈취, RFB 취약점", "KISA W-20, CIS 4.6, MITRE T1021.005"),
+    "ssh":           ("중", "약한 비밀번호/구버전 시 무차별 대입·CVE 악용 가능", "브루트포스, OpenSSH CVE (CVE-2024-6387 등), 키 관리 미흡", "KISA U-01, 국정원 기술적보호조치 5.1, CIS 4.6, MITRE T1021.004"),
+    "telnet":        ("상", "평문 통신으로 자격증명·세션 정보 그대로 노출", "패킷 스니핑, 중간자 공격, 자격증명 탈취", "KISA U-21, 국정원 정보보안기본지침 제32조, CIS 4.5, MITRE T1040"),
+    "rdp":           ("상", "NLA 미적용 시 NTLM 정보 노출, BlueKeep 류 RCE 위험", "NTLM relay, BlueKeep, 무차별 대입", "KISA W-20, 국정원 정보보안기본지침 제29조(원격접근 통제), CIS 4.6, MITRE T1021.001"),
+    "ms-wbt-server": ("상", "NLA 미적용 시 NTLM challenge 응답으로 호스트명/도메인 노출, BlueKeep 류 RCE 위험", "NTLM relay, BlueKeep, 무차별 대입", "KISA W-20, 국정원 정보보안기본지침 제29조(원격접근 통제), CIS 4.6, MITRE T1021.001"),
+    "vnc":           ("상", "평문 인증·약한 비밀번호 시 화면 탈취 / 세션 하이재킹", "약한 인증, 세션 탈취, RFB 취약점", "KISA W-20, 국정원 정보보안기본지침 제29조(원격접근 통제), CIS 4.6, MITRE T1021.005"),
     "vnc-http":      ("상", "VNC over HTTP 평문 화면 탈취 / 약한 인증", "약한 인증, 세션 탈취", "KISA W-20, MITRE T1021.005"),
     "vmrdp":         ("상", "가상화 관리 채널 노출 시 hypervisor 권한 탈취 가능", "관리 세션 탈취, hypervisor escape", "KISA W-65, MITRE T1021.001"),
     "xrdp":          ("상", "Linux RDP 약한 인증 / NLA 미지원 구버전", "무차별 대입, 인증 우회", "KISA W-20, MITRE T1021.001"),
@@ -361,9 +371,9 @@ SERVICE_EXPOSURE_GUIDE = {
     "shell":         ("상", "rsh 셸 직접 노출 — 무인증 명령 실행 가능", "rsh 명령 실행 악용", "KISA U-23, MITRE T1021"),
     "rexec":         ("상", "원격 명령 실행 평문 인증", "자격증명 탈취, 명령 실행", "KISA U-23, MITRE T1021"),
     # ---- 웹 / 프록시
-    "http":          ("중", "평문 통신, 응용 의존 취약점 (XSS/SQLi 등), 헤더 정보 노출", "OWASP Top10, Banner 정보 노출, 관리자 페이지", "KISA W-13, OWASP Top10, MITRE T1190"),
+    "http":          ("중", "평문 통신, 응용 의존 취약점 (XSS/SQLi 등), 헤더 정보 노출", "OWASP Top10, Banner 정보 노출, 관리자 페이지", "KISA W-13, 국정원 기술적보호조치 6.5, OWASP Top10, MITRE T1190"),
     "http-alt":      ("중", "평문 HTTP 대체 포트 — 동일 취약점 면적", "OWASP Top10, Banner 정보 노출", "KISA W-13, OWASP Top10, MITRE T1190"),
-    "https":         ("하", "TLS 설정 미흡 시 약한 cipher / TLS 1.0~1.1 / 자체서명 인증서 신뢰 문제", "TLS 다운그레이드, 약한 cipher, 인증서 오남용", "KISA U-66, NIST SP 800-52, MITRE T1573"),
+    "https":         ("하", "TLS 설정 미흡 시 약한 cipher / TLS 1.0~1.1 / 자체서명 인증서 신뢰 문제", "TLS 다운그레이드, 약한 cipher, 인증서 오남용", "KISA U-66, 국정원 암호모듈 정책(KCMVP), NIST SP 800-52, MITRE T1573"),
     "https-alt":     ("하", "TLS 설정 미흡 시 약한 cipher / TLS 1.0~1.1", "TLS 다운그레이드, 약한 cipher", "KISA U-66, NIST SP 800-52"),
     "ssl/http":      ("하", "TLS over HTTP — 약한 cipher / 구버전 TLS 시 다운그레이드", "TLS 다운그레이드, 약한 cipher", "KISA U-66, NIST SP 800-52"),
     "ssl/https":     ("하", "TLS over HTTPS — 약한 cipher / 구버전 TLS", "TLS 다운그레이드, 약한 cipher", "KISA U-66, NIST SP 800-52"),
@@ -382,7 +392,7 @@ SERVICE_EXPOSURE_GUIDE = {
     "mariadb":       ("상", "외부 노출 시 무차별 대입, 버전 정보 노출", "무차별 대입, 알려진 CVE", "KISA U-46, CIS 4.6, MITRE T1190"),
     "postgresql":    ("상", "외부 노출 시 무차별 대입, scram-sha-256 미적용 시 약한 해시", "무차별 대입, 권한 탈취, CVE 악용", "KISA U-46, CIS 4.6, MITRE T1190"),
     "postgres":      ("상", "외부 노출 시 무차별 대입, 권한 탈취 가능", "무차별 대입, 권한 탈취", "KISA U-46, CIS 4.6, MITRE T1190"),
-    "ms-sql-s":      ("상", "외부 노출 시 sa 무차별 대입, xp_cmdshell 활용 시 OS 명령 실행", "sa 무차별 대입, xp_cmdshell, 권한 상승", "KISA U-46, CIS 4.6, MITRE T1190"),
+    "ms-sql-s":      ("상", "외부 노출 시 sa 무차별 대입, xp_cmdshell 활용 시 OS 명령 실행", "sa 무차별 대입, xp_cmdshell, 권한 상승", "KISA U-46, 국정원 기술적보호조치 6.4(DBMS 직접 노출 금지), CIS 4.6, MITRE T1190"),
     "ms-sql-m":      ("중", "MS-SQL Browser 서비스 — 인스턴스 정보 노출", "정보 수집 (instance 이름·포트)", "KISA U-46"),
     "oracle-tns":    ("상", "외부 노출 시 TNS poisoning, SID 무차별 대입, listener 정보 노출", "TNS poisoning, SID 무차별 대입", "KISA U-46, CIS 4.6, MITRE T1190"),
     "mongodb":       ("상", "기본 인증 없음 / bind 0.0.0.0 시 무인증 데이터 노출·변조", "무인증 접근, 데이터 변조, 랜섬웨어", "KISA U-46, CIS 4.6, MITRE T1190"),
@@ -420,19 +430,19 @@ SERVICE_EXPOSURE_GUIDE = {
     "domain":        ("중", "재귀 쿼리 외부 허용 시 DNS 증폭, zone transfer 시 내부 호스트명 노출", "DNS 증폭 (54x), zone transfer (AXFR)", "KISA U-15, CIS 4.10, MITRE T1018"),
     "dns":           ("중", "재귀 쿼리 외부 허용 시 DNS 증폭, zone transfer 시 내부 정보 노출", "DNS 증폭, zone transfer", "KISA U-15, CIS 4.10, MITRE T1018"),
     # ---- 파일 공유 / 전송
-    "microsoft-ds":  ("상", "SMB1 활성 시 EternalBlue, NTLM relay, 익명 nullsession 가능", "EternalBlue (MS17-010), NTLM relay, 익명 SMB", "KISA W-08, CIS 9.4, MITRE T1021.002"),
-    "netbios-ssn":   ("상", "NetBIOS Session 외부 노출 시 SMB 취약점 / nullsession", "SMB 취약점, null session, NetBIOS 정보 수집", "KISA W-08, CIS 9.4, MITRE T1021.002"),
+    "microsoft-ds":  ("상", "SMB1 활성 시 EternalBlue, NTLM relay, 익명 nullsession 가능", "EternalBlue (MS17-010), NTLM relay, 익명 SMB", "KISA W-08, 국정원 기술적보호조치 7.2, CIS 9.4, MITRE T1021.002"),
+    "netbios-ssn":   ("상", "NetBIOS Session 외부 노출 시 SMB 취약점 / nullsession", "SMB 취약점, null session, NetBIOS 정보 수집", "KISA W-08, 국정원 기술적보호조치 7.2, CIS 9.4, MITRE T1021.002"),
     "netbios-ns":    ("상", "NetBIOS Name Service 외부 노출 시 NetBIOS poisoning", "NetBIOS poisoning, LLMNR 탈취", "KISA W-08, CIS 9.4, MITRE T1557.001"),
     "nbstat":        ("상", "NetBIOS Status — 외부 노출 시 호스트명·도메인 정보 노출", "정보 수집 (호스트명·MAC·사용자)", "KISA W-08, MITRE T1018"),
     "nfs":           ("상", "no_root_squash 시 root 권한 파일 변조 / 익명 mount", "익명 mount, root_squash 우회, 파일 변조", "KISA U-23, CIS 4.6, MITRE T1021"),
-    "ftp":           ("상", "평문 인증, 익명 로그인 가능 시 무인증 파일 접근, FTP bounce", "자격증명 탈취, 익명 접근, FTP bounce, 디렉터리 트래버설", "KISA U-21, CIS 4.5, MITRE T1567"),
+    "ftp":           ("상", "평문 인증, 익명 로그인 가능 시 무인증 파일 접근, FTP bounce", "자격증명 탈취, 익명 접근, FTP bounce, 디렉터리 트래버설", "KISA U-21, 국정원 기술적보호조치 7.1, CIS 4.5, MITRE T1567"),
     "ftps":          ("하", "TLS 적용되어 도청 차단되지만 약한 cipher 시 다운그레이드", "TLS 다운그레이드, 약한 cipher", "KISA U-66, NIST SP 800-52"),
     "tftp":          ("상", "인증 없는 파일 read/write — 설정파일 탈취·변조", "설정파일 탈취, 부팅 이미지 변조", "KISA U-23, CIS 4.5, MITRE T1567"),
     "sftp":          ("하", "SSH 채널 — 키 인증 시 안전. 약한 비밀번호 시 위험", "SSH 무차별 대입", "KISA U-01, CIS 4.6"),
     "rcp":           ("상", "rsh 기반 평문 파일 전송 — 인증 취약", "파일 무단 전송, 덮어쓰기", "KISA U-23, MITRE T1021"),
     # ---- 시간 / 모니터링 / 로그
     "ntp":           ("중", "monlist 활성 시 UDP amplification (556x), 시간 동기화 교란", "NTP amplification (CVE-2013-5211), 시간 변조", "KISA U-30, US-CERT TA14-013A, MITRE T1498.002"),
-    "snmp":          ("상", "community 'public' 기본값 시 시스템 정보 무인증 열람·설정", "정보 수집, 설정 조회·변경, SNMPv1/v2c 약점", "KISA U-30, CIS 4.8, MITRE T1018"),
+    "snmp":          ("상", "community 'public' 기본값 시 시스템 정보 무인증 열람·설정", "정보 수집, 설정 조회·변경, SNMPv1/v2c 약점", "KISA U-30, 국정원 기술적보호조치 6.3(SNMPv3 권장), CIS 4.8, MITRE T1018"),
     "snmptrap":      ("중", "외부 노출 시 모니터링 이벤트 평문 노출", "장비/이벤트 정보 수집", "KISA U-30, CIS 4.8"),
     "zabbix-agent":  ("중", "Server 화이트리스트 미적용 시 무인증 명령 실행 (UserParameter)", "무인증 명령 실행, 정보 수집", "KISA U-30, CIS 4.6"),
     "zabbix-trapper":("중", "외부 노출 시 모니터링 데이터 변조", "데이터 위조, 모니터링 우회", "CIS 4.6"),
@@ -1526,6 +1536,16 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
                 output_lines.append(f"[{sid}] {cleaned}" if sid else cleaned)
             output_joined = "\n".join(output_lines)
 
+            # NSE 추출 (24번째 컬럼) — TLS_CN, SMB_OS, NTLM_Computer 등 키-값 한 줄.
+            # nse_extract 모듈이 없거나 실패해도 빈 문자열로 안전 처리.
+            nse_summary = ""
+            if nse_extract is not None and nse_data:
+                try:
+                    merged = nse_extract.extract_all_nse(nse_data)
+                    nse_summary = nse_extract.format_nse_summary(merged)
+                except Exception:
+                    nse_summary = ""
+
             rows.append([
                 addr, hostname, os_str,
                 proto, portid, lookup.get("port", ""),
@@ -1538,6 +1558,7 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
                 lookup.get("source", ""),
                 detail, remarks,
                 sids_joined, output_joined,
+                nse_summary,
                 lookup.get("memo", ""),
             ])
 
@@ -1552,6 +1573,7 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
             "노출위험", "공격표면", "출처",
             "상세(제품/버전)", "비고",
             "NSE스크립트명", "스크립트출력",
+            "NSE추출",
             "점검메모",
         ])
         for r in rows:
@@ -1646,13 +1668,18 @@ def parse_csv_rows_for_diff(csv_path):
     with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
         r = csv.DictReader(f)
         for row in r:
-            ip = (row.get("IP") or "").strip()
-            proto = ((row.get("프로토콜") or row.get("PROTO") or "").strip().lower())
-            port = (row.get("PORT") or row.get("port") or "").strip()
-            state = (row.get("포트상태") or row.get("STATE") or "").strip().lower()
-            service = (row.get("확인서비스(short)") or row.get("SERVICE") or "").strip()
-            detail = (row.get("상세(제품/버전)") or row.get("DETAIL") or "").strip()
-            nse = (row.get("스크립트출력") or row.get("NSE") or "").strip()
+            # 한국어 컬럼명 (도구가 출력하는 실제 헤더) 우선, 영문 fallback 은 v0.2 호환 / 외부 파이프라인용.
+            ip = (row.get("IP") or row.get("ip") or "").strip()
+            proto = ((row.get("프로토콜") or row.get("PROTO") or row.get("proto") or "").strip().lower())
+            port = (row.get("포트") or row.get("PORT") or row.get("port") or "").strip()
+            state = (row.get("포트상태") or row.get("STATE") or row.get("state") or "").strip().lower()
+            service = (row.get("확인서비스(short)") or row.get("확인서비스") or row.get("SERVICE") or row.get("service") or "").strip()
+            detail = (row.get("상세(제품/버전)") or row.get("상세") or row.get("DETAIL") or row.get("detail") or "").strip()
+            nse = (row.get("스크립트출력") or row.get("NSE") or row.get("nse") or "").strip()
+            # 24번째 컬럼: NSE추출 (key=value; ...) — 있을 때 digest 에 합산해 변경 감지 정밀도 향상.
+            nse_summary = (row.get("NSE추출") or "").strip()
+            if nse_summary:
+                nse = (nse + "\n" + nse_summary) if nse else nse_summary
             if not (ip and proto and port):
                 continue
             rows.append({
@@ -1795,29 +1822,83 @@ def run_cli_diff(args):
         summary_path = os.path.join(out_dir, f"summary_{base_stem}_vs_{curr_stem}_{stamp}.csv")
         snapshot_path = os.path.join(out_dir, f"snapshot_{curr_stem}_{stamp}.csv")
 
-        with open(diff_path, "w", encoding="utf-8-sig", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["change_type", "asset_id", "key_ip", "key_proto", "key_port",
+        out_format = (getattr(args, "out_format", None) or "both").lower()
+        wrote_csv = out_format in ("csv", "both")
+        wrote_xlsx = out_format in ("xlsx", "both")
+
+        diff_headers = ["change_type", "asset_id", "key_ip", "key_proto", "key_port",
                         "base_state", "curr_state", "base_service", "curr_service",
                         "base_detail", "curr_detail", "base_digest", "curr_digest",
-                        "changed_fields"])
-            w.writerows(diff_rows)
+                        "changed_fields"]
+        summary_headers = ["asset_id", "new_open_count", "closed_count", "changed_count",
+                           "unchanged_count", "total_keys_base", "total_keys_curr"]
+        summary_row = [asset_id, summary["NEW_OPEN"], summary["CLOSED"], summary["CHANGED"],
+                       summary["UNCHANGED"], len(base_map), len(curr_map)]
+        snapshot_headers = ["asset_id", "ip", "proto", "port", "state", "service", "detail", "digest"]
 
-        with open(summary_path, "w", encoding="utf-8-sig", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["asset_id", "new_open_count", "closed_count", "changed_count",
-                        "unchanged_count", "total_keys_base", "total_keys_curr"])
-            w.writerow([asset_id, summary["NEW_OPEN"], summary["CLOSED"], summary["CHANGED"],
-                        summary["UNCHANGED"], len(base_map), len(curr_map)])
+        if wrote_csv:
+            with open(diff_path, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(diff_headers)
+                w.writerows(diff_rows)
+            with open(summary_path, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(summary_headers)
+                w.writerow(summary_row)
+            with open(snapshot_path, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(snapshot_headers)
+                w.writerows(snapshot_rows)
+            print(f"[diff] OK: {diff_path}")
+            print(f"[diff] OK: {summary_path}")
+            print(f"[diff] OK: {snapshot_path}")
 
-        with open(snapshot_path, "w", encoding="utf-8-sig", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["asset_id", "ip", "proto", "port", "state", "service", "detail", "digest"])
-            w.writerows(snapshot_rows)
+        if wrote_xlsx:
+            # 색칠 xlsx — change_type 별 행 색.
+            #   NEW_OPEN  → 빨강 (FILL_NEW_OPEN)
+            #   CLOSED    → 회색/자주 (FILL_CLOSED)
+            #   CHANGED   → 노랑 (FILL_CHANGED)
+            #   UNCHANGED → 흰색 (FILL_NONE)
+            color_map = {
+                "NEW_OPEN": xlsx_io.FILL_NEW_OPEN,
+                "CLOSED":   xlsx_io.FILL_CLOSED,
+                "CHANGED":  xlsx_io.FILL_CHANGED,
+                "UNCHANGED": xlsx_io.FILL_NONE,
+            }
+            row_fills = [color_map.get((r[0] or "").upper(), xlsx_io.FILL_NONE) for r in diff_rows]
 
-        print(f"[diff] OK: {diff_path}")
-        print(f"[diff] OK: {summary_path}")
-        print(f"[diff] OK: {snapshot_path}")
+            xlsx_path = os.path.join(out_dir, f"diff_{base_stem}_vs_{curr_stem}_{stamp}.xlsx")
+            sheets = [
+                {
+                    "name": "Diff",
+                    "headers": diff_headers,
+                    "rows": [[str(c) for c in r] for r in diff_rows],
+                    "row_fills": row_fills,
+                    "header_fill": xlsx_io.FILL_HEADER,
+                    "col_widths": [12, 12, 14, 8, 8, 10, 10, 14, 14, 22, 22, 16, 16, 18],
+                },
+                {
+                    "name": "Summary",
+                    "headers": summary_headers,
+                    "rows": [[str(c) for c in summary_row]],
+                    "header_fill": xlsx_io.FILL_HEADER,
+                    "col_widths": [14, 14, 14, 14, 14, 16, 16],
+                },
+                {
+                    "name": "Snapshot",
+                    "headers": snapshot_headers,
+                    "rows": [[str(c) for c in r] for r in snapshot_rows],
+                    "header_fill": xlsx_io.FILL_HEADER,
+                    "col_widths": [14, 14, 8, 8, 10, 14, 22, 16],
+                },
+            ]
+            try:
+                xlsx_io.write_xlsx_multi(xlsx_path, sheets)
+                print(f"[diff] OK: {xlsx_path}")
+            except Exception as e:
+                # xlsx 쓰기 실패해도 CSV 는 살아있어야 — 경고만 출력
+                print(f"[diff] WARN: xlsx 쓰기 실패 ({e}), CSV 만 생성됨.")
+
         return 0
     finally:
         _set_system_awake(False)
@@ -2133,8 +2214,12 @@ class NmapParserApp:
         tk.Button(csv_frame, text="기준/현재 비교(Diff)", command=self._run_diff_dialog).pack(side="left", padx=4)
         tk.Button(csv_frame, text="📂 CSV 취합", command=self._collect_csv_dialog,
                   bg="#e3f2fd").pack(side="left", padx=4)
+        tk.Button(csv_frame, text="📊 시간축 보고서", command=self._generate_report_dialog,
+                  bg="#fff3e0").pack(side="left", padx=4)
         tk.Label(csv_frame, text=
-                 "  CSV 23컬럼: IP, 호스트, OS, 프로토콜, 포트, 표준포트, 포트상태, 추측/확인서비스, 식별, 분류, 용도, 위험도, 암호화, 인증, 노출위험, 공격표면, 출처, 상세, 비고, NSE, 출력, 점검메모",
+                 "  CSV 24컬럼: IP, 호스트, OS, 프로토콜, 포트, 표준포트, 포트상태, "
+                 "추측서비스, 확인서비스, 식별, 분류, 용도, 위험도, 암호화, 인증, "
+                 "노출위험, 공격표면, 출처, 상세, 비고, NSE, 출력, NSE추출, 점검메모",
                  fg="#555").pack(side="left", padx=4)
 
         # 7. 실행 버튼
@@ -2212,6 +2297,14 @@ class NmapParserApp:
                         f"기본 옵션 파일을 만들 수 없습니다.\n원인: {e}\n경로: {self.options_xlsx_path}\n\n"
                         "상단의 '설정 폴더 변경' 버튼으로 쓰기 가능한 폴더를 지정할 수 있습니다.")
                     return
+
+        # 시작 시 한 번만 — DEFAULT_OPTIONS 와 비교해 누락된 옵션이 있으면 popup 으로 추가 제안.
+        # (사용자 활성=0 으로 추가 → 사용자가 GUI 에서 직접 켤 수 있음. 기존 활성/커스텀 보존.)
+        if initial:
+            try:
+                self._maybe_offer_options_reconcile()
+            except Exception:
+                pass  # reconcile 은 nice-to-have. 실패해도 전체 부팅 안 막음.
 
         rows, errors = load_options_xlsx(self.options_xlsx_path)
         if errors:
@@ -2416,6 +2509,9 @@ class NmapParserApp:
                         "상단의 '설정 폴더 변경' 버튼으로 쓰기 가능한 폴더를 지정할 수 있습니다.")
                 self.categories = {}
                 return
+        # 시작 시 13컬럼 schema 마이그레이션 — 헤더가 부족하면 popup 으로 안내.
+        if initial:
+            self._maybe_offer_categories_migration()
         catmap, errors = load_categories_xlsx(self.categories_xlsx_path)
         if errors and not initial:
             messagebox.showwarning("categories.xlsx 일부 행 무시",
@@ -2423,6 +2519,190 @@ class NmapParserApp:
         self.categories = catmap
         if not initial:
             self.status_var.set(f"분류 다시 불러옴 ({len(catmap)}개)")
+
+    def _maybe_offer_options_reconcile(self):
+        """options.xlsx 를 DEFAULT_OPTIONS 와 비교 — 누락된 옵션이면 popup 으로 추가 안내.
+        사용자 활성/커스텀 컬럼/사용자 추가 행 모두 보존.
+        """
+        path = self.options_xlsx_path
+        if not path or not os.path.isfile(path):
+            return
+        try:
+            raw = xlsx_io.read_xlsx(path)
+        except Exception:
+            return
+        if not raw or len(raw) < 2:
+            return
+
+        header = [(c or "").strip() for c in raw[0]]
+        # "옵션" 컬럼 (nmap 인자) 우선, 영문 fallback.
+        opt_col_idx = None
+        for cand in ("옵션", "option", "Option"):
+            if cand in header:
+                opt_col_idx = header.index(cand)
+                break
+        if opt_col_idx is None:
+            return  # 헤더 비정상 — 재구성은 _reload_options 에 맡김
+
+        existing_options = set()
+        for r in raw[1:]:
+            if opt_col_idx < len(r):
+                v = (r[opt_col_idx] or "").strip()
+                if v:
+                    existing_options.add(v)
+
+        missing = []
+        # DEFAULT_OPTIONS 의 (label, option, enabled, group, desc) 를 그대로 사용.
+        for tup in DEFAULT_OPTIONS:
+            label, option = tup[0], tup[1]
+            if option and option not in existing_options:
+                missing.append(tup)
+        if not missing:
+            return
+
+        # 사용자에게 추가 여부 물음. NSE 27 / scan-type 신규 옵션 등을 한 번에 흡수.
+        sample = ", ".join(t[1] for t in missing[:8])
+        if len(missing) > 8:
+            sample += f", ... (+{len(missing) - 8})"
+        ask = messagebox.askyesno(
+            "options.xlsx 에 새 옵션 발견",
+            f"도구 기본 옵션 셋에서 {len(missing)} 개의 새 옵션이 추가되었습니다.\n\n"
+            f"예: {sample}\n\n"
+            f"options.xlsx 에 추가할까요?\n"
+            f"  · 사용자 활성/비활성 상태는 그대로 보존됩니다.\n"
+            f"  · 새 옵션은 활성=0 (꺼짐) 상태로 추가됩니다 — GUI 에서 직접 켜세요.\n"
+            f"  · 사용자가 추가한 행/컬럼도 그대로 보존됩니다.\n"
+            f"  · 기존 파일은 .bak.<timestamp> 로 백업됩니다.\n\n"
+            f"건너뛰기 (No) 면 현재 파일 그대로 사용합니다."
+        )
+        if not ask:
+            return
+
+        # 백업 + 추가 행 생성. xlsx_io 직접 read/write 로 사용자 컬럼 100% 보존.
+        try:
+            import shutil
+            import time as _time
+            ts = _time.strftime("%Y%m%d-%H%M%S")
+            backup = f"{path}.bak.{ts}"
+            shutil.copy2(path, backup)
+        except OSError as e:
+            messagebox.showerror("options.xlsx 백업 실패", f"오류: {e}")
+            return
+
+        # 새 행 = 헤더 너비에 맞춰 표준 4컬럼 + 사용자 추가 컬럼은 빈 문자열.
+        # 표준 컬럼: 스캔 옵션(라벨) / 옵션 / 활성화 / 그룹 / 설명. 헤더 인덱스로 매핑.
+        std_keys = {
+            "스캔 옵션": 0, "스캔옵션": 0, "label": 0, "Label": 0,
+            "옵션": 1, "option": 1, "Option": 1,
+            "활성화": 2, "enabled": 2, "Enabled": 2,
+            "그룹": 3, "group": 3, "Group": 3,
+            "설명": 4, "desc": 4, "Desc": 4, "Description": 4,
+        }
+        col_map = {}
+        for i, h in enumerate(header):
+            key = std_keys.get(h)
+            if key is not None and key not in col_map:
+                col_map[key] = i
+
+        # 누락된 옵션 추가
+        new_rows_to_append = []
+        for label, option, enabled, group, desc in missing:
+            row = [""] * len(header)
+            if 0 in col_map:
+                row[col_map[0]] = label
+            if 1 in col_map:
+                row[col_map[1]] = option
+            if 2 in col_map:
+                row[col_map[2]] = "0"  # 사용자 결정 — 기본 꺼짐.
+            if 3 in col_map:
+                row[col_map[3]] = group or ""
+            if 4 in col_map:
+                row[col_map[4]] = desc or ""
+            new_rows_to_append.append(row)
+
+        all_rows = list(raw) + new_rows_to_append
+        try:
+            xlsx_io.write_xlsx(path, all_rows)
+        except Exception as e:
+            messagebox.showerror("options.xlsx 쓰기 실패", f"오류: {e}\n백업: {backup}")
+            return
+
+        messagebox.showinfo(
+            "options.xlsx 옵션 추가 완료",
+            f"{len(missing)}개의 새 옵션이 추가되었습니다 (활성=0).\n\n"
+            f"백업: {os.path.basename(backup)}\n\n"
+            f"GUI 의 '옵션 다시 불러오기' 또는 도구 재시작으로 반영됩니다.\n"
+            f"필요한 옵션을 GUI 체크박스에서 켜세요."
+        )
+
+    def _maybe_offer_categories_migration(self):
+        """categories.xlsx 헤더가 13컬럼 권장 schema 미만이면 popup 으로 안내.
+        Yes 면 migrate_categories_to_13col.migrate_path 호출. 사용자 컬럼·편집 보존.
+        """
+        path = self.categories_xlsx_path
+        if not path or not os.path.isfile(path):
+            return
+        try:
+            raw = xlsx_io.read_xlsx(path)
+        except Exception:
+            return
+        if not raw or not raw[0]:
+            return
+
+        # 13개 표준 컬럼: 서비스명/표준포트/프로토콜/분류/용도/위험도/암호화/인증/노출위험/공격표면/출처/설명/점검메모
+        std = ["서비스명", "표준포트", "프로토콜", "분류", "용도", "위험도",
+               "암호화", "인증", "노출위험", "공격표면", "출처", "설명", "점검메모"]
+        header = [(c or "").strip() for c in raw[0]]
+        missing = [c for c in std if c not in header]
+        if not missing:
+            return  # 이미 13컬럼
+
+        # 위험 vs 효용 안내. 사용자 동의 시에만 실행.
+        ask = messagebox.askyesno(
+            "categories.xlsx 13컬럼 schema 마이그레이션",
+            f"현재 categories.xlsx 헤더가 13컬럼 권장 schema 보다 부족합니다.\n\n"
+            f"누락된 표준 컬럼: {', '.join(missing)}\n\n"
+            f"13컬럼 schema 로 변환할까요?\n"
+            f"  · 사용자 편집/추가 컬럼은 그대로 보존됩니다.\n"
+            f"  · 기존 파일은 .bak.<timestamp> 로 백업됩니다.\n"
+            f"  · 누락 표준 컬럼은 도구 기본값으로 채워집니다.\n\n"
+            f"건너뛰기 (No) 를 누르면 현재 헤더 그대로 사용합니다."
+        )
+        if not ask:
+            return
+
+        try:
+            # scripts/ 가 sys.path 에 없을 수 있어 동적 추가.
+            import sys as _sys
+            scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
+            if scripts_dir not in _sys.path:
+                _sys.path.insert(0, scripts_dir)
+            from migrate_categories_to_13col import migrate_path
+            result = migrate_path(path)
+        except Exception as e:
+            messagebox.showerror("마이그레이션 실패", f"오류: {e}")
+            return
+
+        if result.get("status") == "ok":
+            extras = result.get("user_extra") or []
+            extras_msg = ("\n사용자 추가 컬럼 보존: " + ", ".join(extras)) if extras else ""
+            messagebox.showinfo(
+                "마이그레이션 완료",
+                f"13컬럼 schema 로 변환되었습니다.\n\n"
+                f"백업: {os.path.basename(result.get('backup') or '')}\n"
+                f"총 {result['total']}행 (새로 추가 {result['added']}개).{extras_msg}"
+            )
+        elif result.get("status") == "no_header":
+            messagebox.showwarning(
+                "마이그레이션 보류",
+                "필수 헤더 '서비스명' 이 없어 자동 변환할 수 없습니다.\n"
+                "Excel 에서 '서비스명' 컬럼을 직접 만든 뒤 도구를 다시 시작하세요."
+            )
+        elif result.get("status") in ("created", "empty"):
+            messagebox.showinfo(
+                "기본값 생성",
+                "기존 파일이 비어 있어 기본값으로 새로 만들었습니다."
+            )
 
     def _open_categories_xlsx(self):
         if self.memory_only or not self.categories_xlsx_path:
@@ -2589,7 +2869,8 @@ class NmapParserApp:
             messagebox.showinfo("설정 폴더 선택 안내",
                 f"{prompt_reason}\n\n다음 창에서 쓰기 가능한 폴더를 직접 선택하세요.\n"
                 "폴더에 기존 xlsx 가 있으면 그대로 사용하고, 없으면 기본값으로 새로 만듭니다.")
-        initial = self.data_dir if os.path.isdir(self.data_dir) else _user_data_dir()
+        # data_dir 가 None (메모리 모드) 일 때 os.path.isdir(None) 가 TypeError 던짐 → and-guard.
+        initial = self.data_dir if (self.data_dir and os.path.isdir(self.data_dir)) else _user_data_dir()
         folder = filedialog.askdirectory(title=title, initialdir=initial)
         if not folder:
             return self._offer_file_direct_fallback("폴더 선택을 취소했습니다.")
@@ -2659,7 +2940,7 @@ class NmapParserApp:
             default_name = CATEGORIES_XLSX_NAME
             writer = write_default_categories_xlsx
 
-        initial_dir = self.data_dir if os.path.isdir(self.data_dir) else _user_data_dir()
+        initial_dir = self.data_dir if (self.data_dir and os.path.isdir(self.data_dir)) else _user_data_dir()
         path = filedialog.asksaveasfilename(
             title=title,
             defaultextension=".xlsx",
@@ -3036,6 +3317,37 @@ class NmapParserApp:
                     tokens = tokens[1:]
             # 출력 플래그 제거 후 우리 -oA 강제 (CSV 파이프라인 보장).
             tokens = self.sanitize_output_args(tokens)
+            # override 박스에 타겟이 명시 안 되면 GUI 타겟 자동 append.
+            #   판단: -iL <file> / -iR / IP 토큰 (대략적 dotted-quad) / hostname-like 가 있으면 명시된 것으로 간주.
+            already_has_target = False
+            ip_like_re = re.compile(r"^\d{1,3}(\.\d{1,3}){3}(/\d{1,3})?$")
+            host_like_re = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,253}$")
+            i = 0
+            while i < len(tokens):
+                t = tokens[i]
+                low = t.lower()
+                if low in ("-il", "-ir"):
+                    already_has_target = True
+                    break
+                # 옵션 토큰 (-, --) 은 패스. 그 외 plain 토큰이면 IP/host 로 간주.
+                if not t.startswith("-") and (ip_like_re.match(t) or host_like_re.match(t)):
+                    # 단, 옵션의 인자 (예: -p 22) 는 제외 — 직전 토큰이 인자받는 옵션이면 skip.
+                    prev = tokens[i - 1] if i > 0 else ""
+                    arg_taking = {"-p", "-T", "-sn", "-sS", "-sT", "--script",
+                                  "--script-args", "--source-port", "-D",
+                                  "--max-retries", "--host-timeout", "--scan-delay",
+                                  "--data-length", "--mtu", "-S", "-e", "--ttl"}
+                    # arg-taking 옵션의 인자 자리는 plain 토큰일 수 있어 prev 가 그 옵션이면 skip.
+                    # (정확한 판단은 어렵지만 대표 케이스만 잡아 false-positive 줄임.)
+                    if prev not in arg_taking and not prev.startswith("--"):
+                        already_has_target = True
+                        break
+                i += 1
+
+            if not already_has_target and targets:
+                # 사용자에게 알림 — "GUI 타겟이 자동 추가됩니다" (override 인 줄 알아도 타겟은 누락 자주 일어남).
+                tokens = list(tokens) + list(targets)
+
             try:
                 self.output_prefix = self._build_output_prefix(targets or ["custom"])
             except OSError as e:
@@ -3636,13 +3948,26 @@ class NmapParserApp:
                 f"수집 폴더를 만들 수 없습니다.\n경로: {dst_dir}\n원인: {e}")
             return
 
-        # recursive 하게 *.csv 찾기 — 단 방금 만든 dst_dir 자체는 제외
+        # recursive 하게 *.csv 찾기.
+        #   1) 방금 만든 dst_dir 자체 제외.
+        #   2) 같은 폴더 재실행 시 만들어진 이전 _collected_<ts>/ 폴더도 제외 (중복 누적 방지).
+        #   3) 파일 내용 hash 가 같으면 dedup (다른 위치에 같은 CSV 사본이 있을 때).
+        import hashlib as _hashlib
+
+        def _is_under_collected_dir(path_obj):
+            for parent in path_obj.parents:
+                name = parent.name
+                if name.startswith("_collected_") and len(name) > len("_collected_") + 4:
+                    return True
+            return False
+
         try:
             csv_paths = []
             for p in Path(src).rglob("*.csv"):
-                # dst_dir 안의 파일은 건너뜀 (재실행 시 중복 방지)
                 try:
                     if Path(dst_dir) in p.parents:
+                        continue
+                    if _is_under_collected_dir(p):
                         continue
                 except Exception:
                     pass
@@ -3651,6 +3976,33 @@ class NmapParserApp:
         except OSError as e:
             messagebox.showerror("탐색 실패", f"파일 탐색 중 오류:\n{e}")
             return
+
+        # hash dedup — 같은 stem 이라도 내용 다르면 둘 다, 같으면 첫 것만 보존.
+        seen_hashes = set()
+        deduped = []
+        skipped_dup = 0
+        for p in csv_paths:
+            try:
+                h = _hashlib.md5()
+                with open(str(p), "rb") as fh:
+                    while True:
+                        b = fh.read(64 * 1024)
+                        if not b:
+                            break
+                        h.update(b)
+                digest = h.hexdigest()
+            except OSError:
+                # hash 실패 시 stem+size 로 fallback
+                try:
+                    digest = f"{p.stem}-{p.stat().st_size}"
+                except OSError:
+                    digest = str(p)
+            if digest in seen_hashes:
+                skipped_dup += 1
+                continue
+            seen_hashes.add(digest)
+            deduped.append(p)
+        csv_paths = deduped
 
         if not csv_paths:
             messagebox.showinfo("CSV 없음", f"하위 폴더에 .csv 파일이 없습니다.\n경로: {src}")
@@ -3687,7 +4039,7 @@ class NmapParserApp:
         newest_str = _dt.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M") if newest else "—"
         msg = (f"CSV 취합 완료\n\n"
                f"수집 폴더: {dst_dir}\n"
-               f"수집된 CSV: {copied}개 (실패 {len(fail_list)}개)\n"
+               f"수집된 CSV: {copied}개 (실패 {len(fail_list)}개, 중복 dedup {skipped_dup}개)\n"
                f"가장 오래된 파일: {oldest_str}\n"
                f"가장 최근 파일: {newest_str}")
         if fail_list:
@@ -3697,6 +4049,54 @@ class NmapParserApp:
         try:
             if sys.platform == "win32":
                 os.startfile(dst_dir)  # type: ignore
+        except OSError:
+            pass
+
+    def _generate_report_dialog(self):
+        """GUI 에서 CSV 폴더를 선택해 5(or 6) 시트 시간축 xlsx 보고서 생성."""
+        folder = filedialog.askdirectory(
+            title="시간축 보고서 — CSV 폴더 선택 (여러 시점 *.csv 가 있는 디렉토리)"
+        )
+        if not folder:
+            return
+        try:
+            import report_generator  # 지연 import
+        except Exception as e:
+            messagebox.showerror("보고서 생성 실패", f"report_generator 모듈 로드 실패: {e}")
+            return
+
+        # 보고서 저장 위치 선택 (기본: 폴더 안 report_<ts>.xlsx)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"report_{ts}.xlsx"
+        out_path = filedialog.asksaveasfilename(
+            title="보고서 저장 위치",
+            initialdir=folder,
+            initialfile=default_name,
+            defaultextension=".xlsx",
+            filetypes=[("Excel xlsx", "*.xlsx")],
+        )
+        if not out_path:
+            return
+
+        try:
+            result = report_generator.generate_report(folder, out_path)
+        except Exception as e:
+            messagebox.showerror("보고서 생성 실패", f"오류: {e}")
+            return
+
+        try:
+            file_count = len(report_generator.collect_csv_files(folder))
+        except Exception:
+            file_count = 0
+        messagebox.showinfo(
+            "보고서 생성 완료",
+            f"5(또는 6) 시트 xlsx 보고서가 생성되었습니다.\n\n"
+            f"입력 CSV: {file_count}개\n출력: {result}\n\n"
+            f"폴더가 자동으로 열립니다."
+        )
+        try:
+            if sys.platform == "win32":
+                os.startfile(os.path.dirname(result))  # type: ignore
         except OSError:
             pass
 
@@ -3732,6 +4132,7 @@ class NmapParserApp:
         args.out = out_dir
         args.asset = asset_id
         args.only_changes = bool(self.diff_only_changes.get())
+        args.out_format = "both"  # GUI 기본 — CSV + 색칠 xlsx 둘 다
         try:
             rc = run_cli_diff(args)
             if rc == 0:
@@ -3863,6 +4264,15 @@ class NmapParserApp:
                     output_lines.append(f"[{sid}] {cleaned}" if sid else cleaned)
                 output_joined = "\n".join(output_lines)
 
+                # NSE 추출 (24번째 컬럼) — TLS_CN/SMB_OS/NTLM_Computer 등 핵심 필드 한 줄.
+                nse_summary = ""
+                if nse_extract is not None and nse_data:
+                    try:
+                        merged = nse_extract.extract_all_nse(nse_data)
+                        nse_summary = nse_extract.format_nse_summary(merged)
+                    except Exception:
+                        nse_summary = ""
+
                 rows.append([
                     addr, hostname, os_str,                     # host-level
                     proto, portid, lookup.get("port", ""),       # 프로토콜 / 포트 / 표준포트
@@ -3875,6 +4285,7 @@ class NmapParserApp:
                     lookup.get("source", ""),
                     detail, remarks,
                     sids_joined, output_joined,
+                    nse_summary,                                 # NSE추출 (24번째)
                     lookup.get("memo", ""),                     # 점검메모 (사용자 편집)
                 ])
 
@@ -3890,6 +4301,7 @@ class NmapParserApp:
                 "노출위험", "공격표면", "출처",
                 "상세(제품/버전)", "비고",
                 "NSE스크립트명", "스크립트출력",
+                "NSE추출",
                 "점검메모",
             ])
             for r in rows:
@@ -3908,6 +4320,13 @@ def main():
     parser.add_argument("--curr", help="diff 현재 파일 (.xml/.csv)")
     parser.add_argument("--asset", help="asset_id (기본: default)")
     parser.add_argument("--only-changes", action="store_true", help="diff에서 변경 행만 출력")
+    parser.add_argument("--out-format", dest="out_format", choices=["csv", "xlsx", "both"],
+                        default="both",
+                        help="diff 출력 포맷 (csv|xlsx|both, 기본 both)")
+    parser.add_argument("--report", action="store_true",
+                        help="시간축 5시트 xlsx 보고서 생성 (--csv-folder 와 함께 사용)")
+    parser.add_argument("--csv-folder", dest="csv_folder",
+                        help="--report 입력 폴더 (.csv 파일들이 있는 디렉토리)")
     args = parser.parse_args()
 
     if args.xml2csv:
@@ -3920,6 +4339,14 @@ def main():
             return run_cli_diff(args)
         except (OSError, ET.ParseError, ValueError) as e:
             print(f"[diff] FAIL: {e}")
+            return 1
+
+    if args.report:
+        try:
+            import report_generator  # 지연 import — GUI 부팅 비용 0.
+            return report_generator.run_cli_report(args)
+        except Exception as e:
+            print(f"[report] FAIL: {e}")
             return 1
 
     root = tk.Tk()
