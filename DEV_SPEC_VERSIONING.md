@@ -24,7 +24,7 @@
 - CSV↔CSV 비교
 - XML↔XML, XML↔CSV 비교(내부 정규화 후 동일 엔진 사용)
 - 비교 결과를 CSV(필수) 및 XLSX(권장)로 출력
-- 자산 그룹/대역 식별자(`asset_id`) 기반 관리
+- 자산은 `IP` 로 자연스럽게 구분 (별도 라벨 불필요)
 
 ### 제외(Out of Scope, 1차)
 - DB 서버 도입(PostgreSQL 등)
@@ -39,7 +39,7 @@
 - **Baseline**: 비교 기준 스냅샷
 - **Current**: 최신 스냅샷
 - **Diff**: Baseline 대비 Current 변경분
-- **Natural Key**: `asset_id + ip + proto + port`
+- **Natural Key**: `ip + proto + port` (자산 구분은 IP 로)
 
 ---
 
@@ -48,7 +48,6 @@
 ## 4.1 정규화 스냅샷 CSV (`snapshot_*.csv`)
 
 필수 컬럼:
-- `asset_id` : 관리 대역/그룹 식별자 (예: HQ-ServerZone)
 - `snapshot_id` : 시점 식별자 (`YYYYMMDD_HHMMSS`)
 - `source_file` : 입력 파일명
 - `ip`
@@ -72,7 +71,6 @@
 
 필수 컬럼:
 - `change_type` : `NEW_OPEN` | `CLOSED` | `CHANGED` | `UNCHANGED`
-- `asset_id`
 - `key_ip`
 - `key_proto`
 - `key_port`
@@ -85,7 +83,6 @@
 
 ## 4.3 Summary CSV (`summary_<base>_vs_<curr>.csv`)
 
-- `asset_id`
 - `new_open_count`
 - `closed_count`
 - `changed_count`
@@ -104,7 +101,7 @@
 - NSE 출력 줄바꿈/제어문자 제거 후 digest 계산
 
 ## 5.2 키 매칭
-- 동일 키(`asset_id, ip, proto, port`)를 같은 포트로 간주
+- 동일 키(`ip, proto, port`)를 같은 포트로 간주 (자산 구분은 IP 로)
 
 ## 5.3 change_type 판정
 1. `NEW_OPEN`
@@ -151,7 +148,6 @@ A) `XML2CSV 변환`
 B) `비교(Diff)`
 - 기준 파일 선택 (XML/CSV)
 - 현재 파일 선택 (XML/CSV)
-- `asset_id` 입력
 - [비교 실행]
 
 ## 7.2 결과 안내
@@ -180,7 +176,7 @@ XLSX 출력은 기존 `xlsx_io.py`를 확장해 적용한다.
 향후 자동화를 위해 GUI 외 CLI를 제공한다.
 
 - `python nmapParser.py --xml2csv <input.xml> --out <dir>`
-- `python nmapParser.py --diff --base <fileA> --curr <fileB> --asset <id> --out <dir>`
+- `python nmapParser.py --diff --base <fileA> --curr <fileB> --out <dir>`
 
 ---
 
@@ -196,7 +192,7 @@ XLSX 출력은 기존 `xlsx_io.py`를 확장해 적용한다.
 
 ### Phase 3 (확장)
 - XML↔XML, XML↔CSV 통합 비교
-- `asset_id` 기반 누적 관리
+- IP 기반 시점 누적 관리 (CSV 취합 + 시간축 보고서)
 
 ### Phase 4 (완성도)
 - XLSX 색상 리포트
