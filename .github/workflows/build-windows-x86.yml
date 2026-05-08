@@ -45,11 +45,17 @@ jobs:
 
       # --noupx: UPX 압축은 Defender / SmartScreen 휴리스틱 오탐 트리거.
       # --clean: 이전 빌드 캐시 잔재 제거.
+      # --add-data "scripts;scripts":
+      #   GUI 의 categories 13컬럼 마이그레이션 popup 이 런타임에
+      #   scripts/migrate_categories_to_13col.py 를 동적 import 함.
+      #   PyInstaller 정적 분석은 sys.path.insert 후 import 를 못 따라가서 자동
+      #   수집 안 됨 → --add-data 로 명시 번들링.
+      #   Windows 에서 separator 는 ';' (Linux 는 ':').
       - name: Build x86 onefile exe
-        run: pyinstaller --onefile --noconsole --noupx --clean --distpath dist-onefile --workpath build-onefile --name nmapParser nmapParser.py
+        run: pyinstaller --onefile --noconsole --noupx --clean --add-data "scripts;scripts" --distpath dist-onefile --workpath build-onefile --name nmapParser nmapParser.py
 
       - name: Build x86 onedir bundle
-        run: pyinstaller --onedir --noconsole --noupx --clean --distpath dist-onedir --workpath build-onedir --name nmapParser nmapParser.py
+        run: pyinstaller --onedir --noconsole --noupx --clean --add-data "scripts;scripts" --distpath dist-onedir --workpath build-onedir --name nmapParser nmapParser.py
 
       - name: Package onedir as zip
         shell: pwsh
