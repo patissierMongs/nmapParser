@@ -1764,12 +1764,12 @@ def run_cli_diff(args):
             raise OSError(f"현재 파일이 없습니다: {args.curr}")
         base_rows = parse_rows_for_diff(args.base)
         curr_rows = parse_rows_for_diff(args.curr)
-        asset_id = args.asset or "default"
         out_dir = args.out or os.path.dirname(os.path.abspath(args.curr)) or os.getcwd()
         os.makedirs(out_dir, exist_ok=True)
 
+        # 자산은 IP 로 자연스럽게 구분되므로 asset_id 별도 라벨 불필요.
         def keyf(r):
-            return (asset_id, r["ip"], r["proto"], r["port"])
+            return (r["ip"], r["proto"], r["port"])
 
         base_map = {keyf(r): r for r in base_rows}
         curr_map = {keyf(r): r for r in curr_rows}
@@ -1804,7 +1804,7 @@ def run_cli_diff(args):
                     if _normalize_for_diff(b.get(fld, "")) != _normalize_for_diff(c.get(fld, ""))
                 )
             diff_rows.append([
-                change, asset_id, k[1], k[2], k[3],
+                change, k[0], k[1], k[2],
                 (b or {}).get("state", ""), (c or {}).get("state", ""),
                 (b or {}).get("service", ""), (c or {}).get("service", ""),
                 (b or {}).get("detail", ""), (c or {}).get("detail", ""),
@@ -1813,7 +1813,7 @@ def run_cli_diff(args):
             ])
 
         for r in curr_rows:
-            snapshot_rows.append([asset_id, r["ip"], r["proto"], r["port"], r["state"], r["service"], r["detail"], r["digest"]])
+            snapshot_rows.append([r["ip"], r["proto"], r["port"], r["state"], r["service"], r["detail"], r["digest"]])
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_stem = _safe_stem_for_path(args.base)
@@ -1826,15 +1826,15 @@ def run_cli_diff(args):
         wrote_csv = out_format in ("csv", "both")
         wrote_xlsx = out_format in ("xlsx", "both")
 
-        diff_headers = ["change_type", "asset_id", "key_ip", "key_proto", "key_port",
+        diff_headers = ["change_type", "key_ip", "key_proto", "key_port",
                         "base_state", "curr_state", "base_service", "curr_service",
                         "base_detail", "curr_detail", "base_digest", "curr_digest",
                         "changed_fields"]
-        summary_headers = ["asset_id", "new_open_count", "closed_count", "changed_count",
+        summary_headers = ["new_open_count", "closed_count", "changed_count",
                            "unchanged_count", "total_keys_base", "total_keys_curr"]
-        summary_row = [asset_id, summary["NEW_OPEN"], summary["CLOSED"], summary["CHANGED"],
+        summary_row = [summary["NEW_OPEN"], summary["CLOSED"], summary["CHANGED"],
                        summary["UNCHANGED"], len(base_map), len(curr_map)]
-        snapshot_headers = ["asset_id", "ip", "proto", "port", "state", "service", "detail", "digest"]
+        snapshot_headers = ["ip", "proto", "port", "state", "service", "detail", "digest"]
 
         if wrote_csv:
             with open(diff_path, "w", encoding="utf-8-sig", newline="") as f:
@@ -1875,21 +1875,24 @@ def run_cli_diff(args):
                     "rows": [[str(c) for c in r] for r in diff_rows],
                     "row_fills": row_fills,
                     "header_fill": xlsx_io.FILL_HEADER,
-                    "col_widths": [12, 12, 14, 8, 8, 10, 10, 14, 14, 22, 22, 16, 16, 18],
+                    # change_type, key_ip, key_proto, key_port,
+                    # base_state, curr_state, base_service, curr_service,
+                    # base_detail, curr_detail, base_digest, curr_digest, changed_fields
+                    "col_widths": [12, 14, 8, 8, 10, 10, 14, 14, 22, 22, 16, 16, 18],
                 },
                 {
                     "name": "Summary",
                     "headers": summary_headers,
                     "rows": [[str(c) for c in summary_row]],
                     "header_fill": xlsx_io.FILL_HEADER,
-                    "col_widths": [14, 14, 14, 14, 14, 16, 16],
+                    "col_widths": [14, 14, 14, 14, 16, 16],
                 },
                 {
                     "name": "Snapshot",
                     "headers": snapshot_headers,
                     "rows": [[str(c) for c in r] for r in snapshot_rows],
                     "header_fill": xlsx_io.FILL_HEADER,
-                    "col_widths": [14, 14, 8, 8, 10, 14, 22, 16],
+                    "col_widths": [14, 8, 8, 10, 14, 22, 16],
                 },
             ]
             try:
@@ -2203,12 +2206,9 @@ class NmapParserApp:
         self.csv_convert = tk.BooleanVar(value=True)
         self.csv_open_only = tk.BooleanVar(value=True)
         self.diff_only_changes = tk.BooleanVar(value=True)
-        self.diff_asset_id = tk.StringVar(value="default")
         tk.Checkbutton(csv_frame, text="CSV 로 변환", variable=self.csv_convert).pack(side="left", padx=6, pady=2)
         tk.Checkbutton(csv_frame, text="open 포트만 CSV 에 포함", variable=self.csv_open_only).pack(side="left", padx=6, pady=2)
         tk.Checkbutton(csv_frame, text="Diff 변경행만", variable=self.diff_only_changes).pack(side="left", padx=4, pady=2)
-        tk.Label(csv_frame, text="asset_id:").pack(side="left", padx=(6, 2))
-        tk.Entry(csv_frame, textvariable=self.diff_asset_id, width=12).pack(side="left", padx=(0, 4))
         tk.Button(csv_frame, text="XML 파일→CSV", command=self._convert_xml_file_dialog).pack(side="left", padx=4)
         tk.Button(csv_frame, text="XML 폴더 일괄→CSV", command=self._convert_xml_folder_dialog).pack(side="left", padx=4)
         tk.Button(csv_frame, text="기준/현재 비교(Diff)", command=self._run_diff_dialog).pack(side="left", padx=4)
@@ -2673,8 +2673,12 @@ class NmapParserApp:
 
         try:
             # scripts/ 가 sys.path 에 없을 수 있어 동적 추가.
+            #   - 소스 실행: <repo_root>/scripts/
+            #   - PyInstaller onefile 실행: sys._MEIPASS/scripts/
+            #     (워크플로 --add-data "scripts;scripts" 로 번들됨)
             import sys as _sys
-            scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
+            base = getattr(_sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
+            scripts_dir = os.path.join(base, "scripts")
             if scripts_dir not in _sys.path:
                 _sys.path.insert(0, scripts_dir)
             from migrate_categories_to_13col import migrate_path
@@ -4121,8 +4125,6 @@ class NmapParserApp:
         if not out_dir:
             return
 
-        asset_id = (self.diff_asset_id.get() or "default").strip() or "default"
-
         class _Args:
             pass
         args = _Args()
@@ -4130,7 +4132,6 @@ class NmapParserApp:
         args.base = base_path
         args.curr = curr_path
         args.out = out_dir
-        args.asset = asset_id
         args.only_changes = bool(self.diff_only_changes.get())
         args.out_format = "both"  # GUI 기본 — CSV + 색칠 xlsx 둘 다
         try:
@@ -4318,7 +4319,6 @@ def main():
     parser.add_argument("--diff", action="store_true", help="기준/현재 파일 비교(diff) 실행")
     parser.add_argument("--base", help="diff 기준 파일 (.xml/.csv)")
     parser.add_argument("--curr", help="diff 현재 파일 (.xml/.csv)")
-    parser.add_argument("--asset", help="asset_id (기본: default)")
     parser.add_argument("--only-changes", action="store_true", help="diff에서 변경 행만 출력")
     parser.add_argument("--out-format", dest="out_format", choices=["csv", "xlsx", "both"],
                         default="both",

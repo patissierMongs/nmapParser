@@ -56,7 +56,6 @@ class DiffEngineTests(unittest.TestCase):
             args.base = base
             args.curr = curr
             args.out = td
-            args.asset = "HQ"
             args.only_changes = True
 
             rc = np.run_cli_diff(args)
@@ -129,7 +128,6 @@ class DiffEngineTests(unittest.TestCase):
             args.base = base
             args.curr = curr
             args.out = td
-            args.asset = "HQ"
             args.only_changes = True
             rc = np.run_cli_diff(args)
             self.assertEqual(rc, 0)
@@ -200,7 +198,6 @@ class DiffEngineTests(unittest.TestCase):
             args.base = base
             args.curr = curr
             args.out = td
-            args.asset = "HQ"
             args.only_changes = True
             rc = np.run_cli_diff(args)
             self.assertEqual(rc, 0)
@@ -236,7 +233,6 @@ class DiffEngineTests(unittest.TestCase):
             args.base = base
             args.curr = curr
             args.out = td
-            args.asset = "HQ"
             args.only_changes = False
             args.out_format = "both"
 
@@ -284,7 +280,6 @@ class DiffEngineTests(unittest.TestCase):
             args.base = base
             args.curr = curr
             args.out = td
-            args.asset = "HQ"
             args.only_changes = False
             args.out_format = "xlsx"
 
@@ -301,7 +296,6 @@ class DiffEngineTests(unittest.TestCase):
         args.base = "/nonexistent/base.csv"
         args.curr = "/nonexistent/curr.csv"
         args.out = tempfile.gettempdir()
-        args.asset = "HQ"
         args.only_changes = True
         with self.assertRaises(OSError):
             np.run_cli_diff(args)
