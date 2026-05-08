@@ -410,3 +410,311 @@ def read_xlsx(path):
             else:
                 rows.append([cells.get(i, "") for i in range(max_c + 1)])
     return rows
+
+
+# =========================================================================== multi-sheet writer
+# 시간축 보고서 (현황/히트맵/변경이력/위험도추이/메타/NSE상세) 와 diff 색칠을 위해 사용.
+# 단일시트 write_xlsx 와 별개의 styles.xml 을 사용해 색상 fill 9개 + 추가 cellXfs.
+
+# 색상 fill 인덱스 (사용자 코드에서 row_fills 또는 cell_fills 로 지정):
+#   FILL_NONE          = 0  # 기본 (무색)
+#   FILL_NEW_OPEN      = 1  # 빨강  — 새 열린 포트 / NEW_OPEN
+#   FILL_KEEP          = 2  # 하늘  — 유지된 열린 포트
+#   FILL_CLOSED        = 3  # 자주  — 닫힘 / CLOSED
+#   FILL_UNOBSERVED    = 4  # 회색  — 미관측 (해당 시점에 스캔 결과 없음)
+#   FILL_CHANGED       = 5  # 노랑  — service/version 변경 / CHANGED
+#   FILL_UNCHANGED     = 6  # 흰색  — UNCHANGED (FILL_NONE 과 동일하지만 명시)
+#   FILL_HEADER        = 7  # 옅은 회색 — 헤더 시각 강조
+#   FILL_RISK_HIGH     = 8  # 진한 빨강 — 위험도 상
+
+FILL_NONE = 0
+FILL_NEW_OPEN = 1
+FILL_KEEP = 2
+FILL_CLOSED = 3
+FILL_UNOBSERVED = 4
+FILL_CHANGED = 5
+FILL_UNCHANGED = 6
+FILL_HEADER = 7
+FILL_RISK_HIGH = 8
+
+# (R,G,B) hex (앞에 FF 붙여 ARGB).
+_FILL_RGB = {
+    FILL_NEW_OPEN:    "FFCDD2",  # 연한 빨강
+    FILL_KEEP:        "BBDEFB",  # 연한 하늘
+    FILL_CLOSED:      "E1BEE7",  # 연한 자주
+    FILL_UNOBSERVED:  "EEEEEE",  # 회색
+    FILL_CHANGED:     "FFF59D",  # 연한 노랑
+    FILL_UNCHANGED:   "FFFFFF",  # 흰색 (시각 동등)
+    FILL_HEADER:      "F5F5F5",  # 헤더 옅은 회색
+    FILL_RISK_HIGH:   "EF9A9A",  # 진한 빨강
+}
+
+
+def _styles_xml_multi():
+    """multi-sheet 용 styles.xml — 9개 fill + 매칭 cellXfs.
+    cellXfs index = FILL_* 와 그대로 일치하지만 헤더용 (bold) 은 별도 인덱스 부여."""
+    fills_xml = [
+        '<fill><patternFill patternType="none"/></fill>',
+        '<fill><patternFill patternType="gray125"/></fill>',
+    ]
+    # FILL_NEW_OPEN(1) ~ FILL_RISK_HIGH(8) 를 fills count 인덱스 2~9 에 매핑.
+    for i in (FILL_NEW_OPEN, FILL_KEEP, FILL_CLOSED, FILL_UNOBSERVED,
+              FILL_CHANGED, FILL_UNCHANGED, FILL_HEADER, FILL_RISK_HIGH):
+        rgb = _FILL_RGB[i]
+        fills_xml.append(
+            f'<fill><patternFill patternType="solid">'
+            f'<fgColor rgb="FF{rgb}"/><bgColor indexed="64"/>'
+            f'</patternFill></fill>'
+        )
+
+    # cellXfs: index 0 default, 1 bold header (no fill), 2~9 = fill 매칭 (font0).
+    # 헤더+필 = 10 (bold + FILL_HEADER), 11 (bold + FILL_RISK_HIGH).
+    # _fill_xf_for_index() 는 fill 인덱스 → cellXfs 인덱스 매핑을 알고 있어야 함.
+    cellxfs_parts = [
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>',                       # 0 default
+        '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>',          # 1 bold header (no fill)
+    ]
+    # 인덱스 2~9 → fillId 2~9. font0.
+    for fill_idx in range(2, 10):
+        cellxfs_parts.append(
+            f'<xf numFmtId="0" fontId="0" fillId="{fill_idx}" borderId="0"'
+            f' xfId="0" applyFill="1"/>'
+        )
+    # 인덱스 10 = bold header + FILL_HEADER (fillId 8). 11 = bold header + FILL_RISK_HIGH (fillId 9).
+    cellxfs_parts.append(
+        f'<xf numFmtId="0" fontId="1" fillId="8" borderId="0" xfId="0"'
+        f' applyFont="1" applyFill="1"/>'                                                        # 10 bold + header bg
+    )
+    cellxfs_parts.append(
+        f'<xf numFmtId="0" fontId="1" fillId="9" borderId="0" xfId="0"'
+        f' applyFont="1" applyFill="1"/>'                                                        # 11 bold + risk high
+    )
+
+    cellxfs_count = len(cellxfs_parts)
+    fills_count = len(fills_xml)
+
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<numFmts count="0"/>'
+        '<fonts count="2">'
+        '<font><sz val="11"/><name val="Calibri"/><family val="2"/></font>'
+        '<font><b/><sz val="11"/><name val="Calibri"/><family val="2"/></font>'
+        '</fonts>'
+        f'<fills count="{fills_count}">' + ''.join(fills_xml) + '</fills>'
+        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        f'<cellXfs count="{cellxfs_count}">' + ''.join(cellxfs_parts) + '</cellXfs>'
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+        '<dxfs count="0"/>'
+        '<tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>'
+        '</styleSheet>'
+    )
+
+
+def _fill_to_xf(fill_idx, *, header=False):
+    """FILL_* 인덱스 → cellXfs 인덱스 변환.
+    header=True 면 굵은 헤더 위에 배경색을 입힘 (FILL_HEADER → 10, FILL_RISK_HIGH → 11)."""
+    if header:
+        if fill_idx == FILL_HEADER:
+            return 10
+        if fill_idx == FILL_RISK_HIGH:
+            return 11
+        return 1  # bold default
+    if not fill_idx:
+        return 0
+    if 1 <= fill_idx <= 8:
+        # cellXfs index 2..9 매핑
+        return fill_idx + 1
+    return 0
+
+
+def _build_multi_sheet_xml(sheet, shared_str_idx):
+    """단일 시트 XML 생성 (multi-sheet writer 용).
+    sheet = {"name", "headers", "rows", "row_fills"?, "cell_fills"?, "col_widths"?, "header_fill"?}
+      - row_fills: list[int|None], 데이터 행마다 fill 인덱스. 행 전체에 적용.
+      - cell_fills: list[list[int|None]], 셀 단위 fill (row_fills 와 동시 사용 시 cell 우선).
+      - header_fill: int — 헤더 행 fill (FILL_HEADER 권장).
+    """
+    headers = sheet.get("headers") or []
+    body_rows = sheet.get("rows") or []
+    row_fills = sheet.get("row_fills") or [None] * len(body_rows)
+    cell_fills = sheet.get("cell_fills") or [[] for _ in body_rows]
+    header_fill = sheet.get("header_fill", FILL_NONE)
+    col_widths = sheet.get("col_widths")
+
+    all_rows = [headers] + list(body_rows)
+    n_rows = len(all_rows)
+    n_cols = max((len(r) for r in all_rows), default=1)
+    last_ref = col_letter(max(0, n_cols - 1)) + str(max(1, n_rows))
+    dimension = "A1" if n_rows == 0 else f"A1:{last_ref}"
+
+    parts = []
+    parts.append('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n')
+    parts.append('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+                 ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">')
+    parts.append(f'<dimension ref="{dimension}"/>')
+    parts.append('<sheetViews><sheetView workbookViewId="0"/></sheetViews>')
+    parts.append('<sheetFormatPr defaultRowHeight="15"/>')
+
+    if col_widths:
+        parts.append('<cols>')
+        for i, w in enumerate(col_widths, start=1):
+            parts.append(f'<col min="{i}" max="{i}" width="{w}" customWidth="1"/>')
+        parts.append('</cols>')
+
+    parts.append('<sheetData>')
+    for r_idx, row in enumerate(all_rows, start=1):
+        is_header = (r_idx == 1)
+        if is_header:
+            row_xf = _fill_to_xf(header_fill, header=True)
+        else:
+            row_xf = _fill_to_xf(row_fills[r_idx - 2] if r_idx - 2 < len(row_fills) else None)
+
+        spans = f' spans="1:{max(1, len(row))}"' if row else ''
+        parts.append(f'<row r="{r_idx}"{spans}>')
+        for c_idx, val in enumerate(row):
+            if val is None:
+                continue
+            text = "" if val is None else str(val)
+            if text not in shared_str_idx:
+                shared_str_idx[text] = len(shared_str_idx)
+            sidx = shared_str_idx[text]
+            ref = col_letter(c_idx) + str(r_idx)
+
+            # cell-level fill 우선
+            cell_xf = row_xf
+            if not is_header and r_idx - 2 < len(cell_fills):
+                row_cell_fills = cell_fills[r_idx - 2]
+                if c_idx < len(row_cell_fills) and row_cell_fills[c_idx]:
+                    cell_xf = _fill_to_xf(row_cell_fills[c_idx])
+
+            style_attr = f' s="{cell_xf}"' if cell_xf else ''
+            parts.append(f'<c r="{ref}" t="s"{style_attr}><v>{sidx}</v></c>')
+        parts.append('</row>')
+    parts.append('</sheetData>')
+    parts.append('<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>')
+    parts.append('</worksheet>')
+    return ''.join(parts)
+
+
+def _build_multi_workbook_xml(sheet_names):
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+        ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<fileVersion appName="nmapParser"/>'
+        '<workbookPr/>'
+        '<bookViews><workbookView xWindow="0" yWindow="0" windowWidth="20000" windowHeight="12000"/></bookViews>'
+        '<sheets>'
+    ]
+    for i, name in enumerate(sheet_names, start=1):
+        safe_name = xml_escape(_sanitize_xml_text(name))[:31] or f"Sheet{i}"
+        parts.append(f'<sheet name="{safe_name}" sheetId="{i}" r:id="rId{i}"/>')
+    parts.append('</sheets></workbook>')
+    return ''.join(parts)
+
+
+def _build_multi_workbook_rels(n_sheets):
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    ]
+    for i in range(1, n_sheets + 1):
+        parts.append(
+            f'<Relationship Id="rId{i}"'
+            f' Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"'
+            f' Target="worksheets/sheet{i}.xml"/>'
+        )
+    next_id = n_sheets + 1
+    parts.append(
+        f'<Relationship Id="rId{next_id}"'
+        f' Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"'
+        f' Target="styles.xml"/>'
+        f'<Relationship Id="rId{next_id + 1}"'
+        f' Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings"'
+        f' Target="sharedStrings.xml"/>'
+        '</Relationships>'
+    )
+    return ''.join(parts)
+
+
+def _build_multi_content_types(n_sheets):
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml"'
+        ' ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+    ]
+    for i in range(1, n_sheets + 1):
+        parts.append(
+            f'<Override PartName="/xl/worksheets/sheet{i}.xml"'
+            f' ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        )
+    parts.append(
+        '<Override PartName="/xl/styles.xml"'
+        ' ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        '<Override PartName="/xl/sharedStrings.xml"'
+        ' ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
+        '<Override PartName="/docProps/core.xml"'
+        ' ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+        '<Override PartName="/docProps/app.xml"'
+        ' ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+        '</Types>'
+    )
+    return ''.join(parts)
+
+
+def write_xlsx_multi(path, sheets, *, atomic=True):
+    """multi-sheet xlsx 저장 (per-row / per-cell 색칠 지원).
+
+    sheets: list[dict]
+      필수: name(str), headers(list[str]), rows(list[list[str]])
+      옵션:
+        row_fills: list[int|None]   — 데이터 행마다 FILL_* 인덱스 (헤더 제외)
+        cell_fills: list[list[int|None]] — 셀 단위 색 (row_fills 와 같이 쓰면 cell 우선)
+        col_widths: list[float]
+        header_fill: int            — 헤더 행 색 (default FILL_NONE)
+    """
+    if not sheets:
+        raise ValueError("write_xlsx_multi: sheets 가 비어 있습니다.")
+
+    shared_str_idx = {}
+    sheet_xmls = []
+    sheet_names = []
+    for s in sheets:
+        sheet_xmls.append(_build_multi_sheet_xml(s, shared_str_idx))
+        sheet_names.append(s.get("name") or f"Sheet{len(sheet_names)+1}")
+    shared_strings_xml = _build_shared_strings_xml(shared_str_idx)
+
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+
+    base = os.path.basename(path)
+    tmp_path = os.path.join(parent or ".", f".{base}.tmp.{os.getpid()}") if atomic else path
+
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", _build_multi_content_types(len(sheets)))
+            z.writestr("_rels/.rels", ROOT_RELS_XML)
+            z.writestr("docProps/core.xml", DOCPROPS_CORE_XML)
+            z.writestr("docProps/app.xml", DOCPROPS_APP_XML)
+            z.writestr("xl/workbook.xml", _build_multi_workbook_xml(sheet_names))
+            z.writestr("xl/_rels/workbook.xml.rels", _build_multi_workbook_rels(len(sheets)))
+            z.writestr("xl/styles.xml", _styles_xml_multi())
+            z.writestr("xl/sharedStrings.xml", shared_strings_xml)
+            for i, sx in enumerate(sheet_xmls, start=1):
+                z.writestr(f"xl/worksheets/sheet{i}.xml", sx)
+        if atomic and tmp_path != path:
+            os.replace(tmp_path, path)
+    except Exception:
+        if atomic and tmp_path != path:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
