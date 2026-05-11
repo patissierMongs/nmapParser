@@ -121,23 +121,31 @@ def _extract_http_title(out):
 
 
 def _extract_ssh_hostkey(out):
+    """SSH host key 핑거프린트 추출.
+    nmap 출력에 따라 SHA256 형태 (`SHA256:base64`) 또는 MD5 형태
+    (`xx:xx:...` hex pairs) 둘 다 나옴. 결과 키를 라벨로 정확히 구분:
+      - SHA256:접두사 있으면 SSH_FP_SHA256
+      - hex colon-pairs 면 SSH_FP_MD5 (전통적 MD5 fingerprint)
+    """
     fields = {}
-    # 예: "  3072 SHA256:abc... (RSA)\n  256 SHA256:xyz... (ED25519)\n"
     types = []
-    first_fp = ""
-    # SHA256: 접두사를 캡처에 포함시켜 출력에서도 그대로 남도록 (users 친숙).
-    # MD5 형태 (16:hex 콜론 구분) 도 같이 잡되 보통 SHA256 가 우선.
-    for m in re.finditer(r"\d+\s+(SHA256:\S+|[0-9a-fA-F:]{20,})\s*\(([A-Za-z0-9_\-]+)\)", out):
+    sha256_fp = ""
+    md5_fp = ""
+    for m in re.finditer(r"\d+\s+(SHA256:\S+|[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5,})\s*\(([A-Za-z0-9_\-]+)\)", out):
         fp = m.group(1)
         kt = m.group(2)
         if kt and kt.lower() not in [t.lower() for t in types]:
             types.append(kt.lower())
-        if not first_fp:
-            first_fp = fp
+        if fp.startswith("SHA256:") and not sha256_fp:
+            sha256_fp = fp
+        elif ":" in fp and not fp.startswith("SHA256:") and not md5_fp:
+            md5_fp = fp
     if types:
         fields["SSH_KeyTypes"] = ",".join(types)
-    if first_fp:
-        fields["SSH_FP_SHA256"] = first_fp
+    if sha256_fp:
+        fields["SSH_FP_SHA256"] = sha256_fp
+    if md5_fp:
+        fields["SSH_FP_MD5"] = md5_fp
     return fields
 
 
@@ -289,21 +297,42 @@ def _extract_rpcinfo(out):
 
 
 def _extract_fingerprint_strings(out):
+    """nmap 의 fingerprint-strings 출력에서 의미있는 첫 응답 라인 추출.
+
+    nmap 출력 형태:
+        |  FourOhFourRequest, GetRequest, OfficeScan, ...:
+        |    HTTP/1.0 200 OK
+        |    Content-Type: text/plain
+        |    ...
+
+    첫 줄은 nmap 의 probe **이름** 들 (콤마 + 콜론 끝). 우리가 원하는 건 그 다음
+    들여쓰기된 실제 응답 바이트. 이전 구현이 첫 비어있지 않은 라인을 무조건
+    Raw_FirstLine 으로 잡아서 probe name 리스트를 결과로 보여주는 버그가 있었음.
+
+    이번 구현은:
+      1) `<probe-names>:` 헤더 라인 skip (콜론으로 끝나는 한 줄)
+      2) 그 다음 줄 (들여쓰기 더 깊은 raw 응답) 캡쳐
+      3) 못 찾으면 빈 dict (fingerprint-strings 가 떴다는 자체가 nmap 의 식별
+         실패 신호 — 굳이 leak 시키지 않음)
+    """
     fields = {}
-    # NULL probe 의 첫 응답 — output 에 보통 "NULL: ...\n" 또는 첫 hex string 줄
-    # 가장 단순: 첫 비어있지 않은 라인 (script-id 헤더 제외)
     lines = (out or "").splitlines()
-    for line in lines:
-        s = line.strip()
+    saw_probe_header = False
+    for raw in lines:
+        s = raw.strip().lstrip("|_ ").strip()
         if not s:
             continue
-        # NSE 헤더성 라인 skip
-        if s.startswith("|") or s.startswith("_"):
-            s = s.lstrip("|_ ")
-        if not s:
+        # 첫 줄: probe 이름들 + ':' 로 끝남 — skip 하고 다음 줄을 캡쳐 대상으로.
+        if not saw_probe_header and s.endswith(":") and "," in s:
+            saw_probe_header = True
             continue
-        # 너무 짧거나 'fingerprint-strings:' 같은 헤더 skip
-        if len(s) < 5 or s.lower().startswith(("fingerprint-strings", "if you know")):
+        # 한 줄에 probe 이름이 콤마 여러 개 + 콜론 끝 형태면 skip
+        if s.endswith(":") and len(s.split(",")) >= 2:
+            continue
+        if s.lower().startswith(("fingerprint-strings", "if you know")):
+            continue
+        # 너무 짧으면 의미 없음
+        if len(s) < 4:
             continue
         if len(s) > 80:
             s = s[:77] + "..."

@@ -36,6 +36,7 @@ import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
+import html
 from datetime import datetime
 from dataclasses import dataclass, field
 
@@ -1058,12 +1059,30 @@ def extract_key_line(script_id, output):
     return ""
 
 
+def _decode_nse_output(raw):
+    """nmap XML 의 <script output="..."> 안에 numeric character reference
+    (`&#8211;` 같은) 가 attribute-escape 형태로 들어있는 경우가 있음.
+    ElementTree 는 attribute 의 standard XML entity (`&amp;`, `&lt;` 등) 는
+    decode 하지만 nmap 이 일부 케이스에서 한 번 더 escape 한 결과 (`&amp;#8211;`)
+    가 그대로 남는 경우가 있어 html.unescape 한 번 추가로 적용.
+    안전: 일반 텍스트에는 영향 없음 (entity 가 없으면 no-op)."""
+    if not raw:
+        return ""
+    try:
+        return html.unescape(raw)
+    except Exception:
+        return raw
+
+
 def compute_remarks(detail, nse_data):
-    """비고 컬럼 — detail 우선, 그 다음 NSE key-line 1~2개. 멀티라인 절대 X.
-    nse_data = [(script_id, output), ...]"""
+    """비고 컬럼 — NSE key-line (CN, OS, hostname, title 등) 1~2개 요약.
+    멀티라인 절대 X.
+    nse_data = [(script_id, output), ...]
+
+    detail 은 별도 `상세(제품/버전)` 컬럼에 있으니 비고에서는 중복 X.
+    NSE 가 0개면 비고는 빈 문자열.
+    """
     parts = []
-    if detail:
-        parts.append(detail)
     for sid, out in (nse_data or []):
         key = extract_key_line(sid, out)
         if key and key not in parts:
@@ -1431,28 +1450,65 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
         nmap_exe = find_nmap_exe()
         services_table = parse_nmap_services(nmap_exe) if nmap_exe else {}
 
-    def _lookup_full_local(probed_name, guessed_name):
-        for n in (probed_name, guessed_name):
-            if n:
-                key = n.rstrip("?").strip().lower()
-                if key and key in categories:
-                    info = categories[key]
-                    return {
-                        "category": info.get("category", "미분류"),
-                        "usage": info.get("usage", ""),
-                        "risk": info.get("risk", ""),
-                        "encryption": info.get("encryption", ""),
-                        "auth": info.get("auth", ""),
-                        "port": info.get("port", ""),
-                        "protocol": info.get("protocol", ""),
-                        "exposure_risk": info.get("exposure_risk", ""),
-                        "attack_surface": info.get("attack_surface", ""),
-                        "source": info.get("source", ""),
-                        "memo": info.get("memo", ""),
-                    }
-        return {"category": "미분류", "usage": "", "risk": "",
-                "encryption": "", "auth": "", "port": "", "protocol": "",
-                "exposure_risk": "", "attack_surface": "", "source": "", "memo": ""}
+    def _lookup_full_local(probed_name, guessed_name, port_id=None, script_ids=None):
+        """probed 우선 정책 + HTTPS 자동 승격 + probed-honest fallback.
+
+        Args:
+          probed_name: nmap probed name (e.g., "ssh", "http", "nagios-nsca")
+          guessed_name: nmap-services 룩업 추측 (e.g., "postgresql")
+          port_id: str | None — TCP/UDP 포트 (HTTPS 자동 승격 판단용)
+          script_ids: iterable | None — NSE 스크립트 id 리스트 (TLS 흔적 판단)
+
+        정책:
+          1) HTTPS 승격: probed 가 'http' 인데 포트가 443/8443 이거나
+             ssl/tls 관련 NSE 가 있으면 키를 'https' 로 강제.
+          2) probed 가 비어있지 않으면 probed 만 사용. categories 에 없으면
+             '미분류' 반환 (guessed 로 fallback 하지 않음 — 다른 서비스의
+             분류가 잘못 leak 되는 케이스 방지).
+          3) probed 가 비어있거나 '?'/'tcpwrapped' 같은 미식별 마크면
+             guessed fallback.
+        """
+        def _empty():
+            return {"category": "미분류", "usage": "", "risk": "",
+                    "encryption": "", "auth": "", "port": "", "protocol": "",
+                    "exposure_risk": "", "attack_surface": "", "source": "",
+                    "memo": ""}
+
+        def _from(info):
+            return {
+                "category": info.get("category", "미분류"),
+                "usage": info.get("usage", ""),
+                "risk": info.get("risk", ""),
+                "encryption": info.get("encryption", ""),
+                "auth": info.get("auth", ""),
+                "port": info.get("port", ""),
+                "protocol": info.get("protocol", ""),
+                "exposure_risk": info.get("exposure_risk", ""),
+                "attack_surface": info.get("attack_surface", ""),
+                "source": info.get("source", ""),
+                "memo": info.get("memo", ""),
+            }
+
+        # HTTPS 자동 승격
+        tls_scripts = {"ssl-cert", "ssl-enum-ciphers", "tls-alpn",
+                       "ssl-date", "ssl-known-key", "ssl-heartbleed"}
+        has_tls = bool(set((s or "").lower() for s in (script_ids or [])) & tls_scripts)
+        pname = (probed_name or "").rstrip("?").strip().lower()
+        if pname in ("http", "ssl/http") and (str(port_id or "") in ("443", "8443") or has_tls):
+            pname = "https"
+
+        # probed 우선 (probed-honest)
+        if pname and pname not in ("tcpwrapped", ""):
+            if pname in categories:
+                return _from(categories[pname])
+            # probed 가 식별됐지만 categories 에 없음 → 미분류 (guessed 로 fallback X)
+            return _empty()
+
+        # probed 가 비어있거나 미식별 — guessed 시도
+        gname = (guessed_name or "").rstrip("?").strip().lower()
+        if gname and gname in categories:
+            return _from(categories[gname])
+        return _empty()
 
     root = parse_nmap_xml_resilient(xml_path)
     rows = []
@@ -1524,10 +1580,12 @@ def convert_xml_to_csv_standalone(xml_path, csv_path, open_only=False, categorie
                 probed_short = ""
                 detail = ""
 
-            lookup = _lookup_full_local(probed_short, guessed)
             identification = compute_identification_status(svc_el)
             scripts = port.findall("script")
-            nse_data = [(sc.get("id", "") or "", sc.get("output", "") or "") for sc in scripts]
+            _script_ids = [sc.get("id", "") or "" for sc in scripts]
+            lookup = _lookup_full_local(probed_short, guessed,
+                                        port_id=portid, script_ids=_script_ids)
+            nse_data = [(sc.get("id", "") or "", _decode_nse_output(sc.get("output", "") or "")) for sc in scripts]
             remarks = compute_remarks(detail, nse_data)
             sids_joined = ", ".join(sid for sid, _ in nse_data if sid)
             output_lines = []
@@ -1727,7 +1785,7 @@ def parse_xml_rows_for_diff(xml_path):
                 ostype = svc_el.get("ostype", "") or ""
                 detail = " ".join(p for p in (product, version, extrainfo, ostype) if p).strip()
             scripts = port.findall("script")
-            nse = "\n".join((sc.get("output", "") or "") for sc in scripts)
+            nse = "\n".join(_decode_nse_output(sc.get("output", "") or "") for sc in scripts)
             if not (ip and proto and portid):
                 continue
             rows.append({
@@ -2728,33 +2786,59 @@ class NmapParserApp:
         except OSError as e:
             messagebox.showerror("열기 실패", f"파일을 열 수 없음: {e}")
 
-    def _lookup_full(self, probed_name, guessed_name):
+    def _lookup_full(self, probed_name, guessed_name, port_id=None, script_ids=None):
         """확인서비스(short) 또는 추측서비스 이름으로 lookup.
+
+        정책 (v0.4.2):
+          1) HTTPS 자동 승격 — probed 가 'http' 인데 포트 443/8443 이거나
+             ssl/tls NSE 가 있으면 키를 'https' 로 강제.
+          2) probed 가 비어있지 않으면 probed 만 사용 (probed-honest).
+             categories 에 없으면 '미분류' 반환 — guessed 로 fallback 하지 않음
+             (다른 서비스 분류가 leak 되는 케이스 방지: 예 probed=nagios-nsca,
+             guessed=postgresql 일 때 postgresql 위험도 가 nagios 행에 붙는 버그).
+          3) probed 가 비어있거나 'tcpwrapped' 같은 미식별 마크일 때만 guessed fallback.
+
         리턴 dict (모든 키 항상 존재):
             category, usage, risk, encryption, auth, port, protocol,
             exposure_risk, attack_surface, source, memo
         """
-        for n in (probed_name, guessed_name):
-            if n:
-                key = n.rstrip("?").strip().lower()
-                if key and key in self.categories:
-                    info = self.categories[key]
-                    return {
-                        "category": info.get("category", "미분류"),
-                        "usage": info.get("usage", ""),
-                        "risk": info.get("risk", ""),
-                        "encryption": info.get("encryption", ""),
-                        "auth": info.get("auth", ""),
-                        "port": info.get("port", ""),
-                        "protocol": info.get("protocol", ""),
-                        "exposure_risk": info.get("exposure_risk", ""),
-                        "attack_surface": info.get("attack_surface", ""),
-                        "source": info.get("source", ""),
-                        "memo": info.get("memo", ""),
-                    }
-        return {"category": "미분류", "usage": "", "risk": "",
-                "encryption": "", "auth": "", "port": "", "protocol": "",
-                "exposure_risk": "", "attack_surface": "", "source": "", "memo": ""}
+        def _empty():
+            return {"category": "미분류", "usage": "", "risk": "",
+                    "encryption": "", "auth": "", "port": "", "protocol": "",
+                    "exposure_risk": "", "attack_surface": "", "source": "",
+                    "memo": ""}
+
+        def _from(info):
+            return {
+                "category": info.get("category", "미분류"),
+                "usage": info.get("usage", ""),
+                "risk": info.get("risk", ""),
+                "encryption": info.get("encryption", ""),
+                "auth": info.get("auth", ""),
+                "port": info.get("port", ""),
+                "protocol": info.get("protocol", ""),
+                "exposure_risk": info.get("exposure_risk", ""),
+                "attack_surface": info.get("attack_surface", ""),
+                "source": info.get("source", ""),
+                "memo": info.get("memo", ""),
+            }
+
+        tls_scripts = {"ssl-cert", "ssl-enum-ciphers", "tls-alpn",
+                       "ssl-date", "ssl-known-key", "ssl-heartbleed"}
+        has_tls = bool(set((s or "").lower() for s in (script_ids or [])) & tls_scripts)
+        pname = (probed_name or "").rstrip("?").strip().lower()
+        if pname in ("http", "ssl/http") and (str(port_id or "") in ("443", "8443") or has_tls):
+            pname = "https"
+
+        if pname and pname not in ("tcpwrapped", ""):
+            if pname in self.categories:
+                return _from(self.categories[pname])
+            return _empty()
+
+        gname = (guessed_name or "").rstrip("?").strip().lower()
+        if gname and gname in self.categories:
+            return _from(self.categories[gname])
+        return _empty()
 
     def _open_options_folder(self):
         """options.xlsx 폴더 열기 — 메모리 모드 / UNC hang 대비 try/except."""
@@ -4247,14 +4331,15 @@ class NmapParserApp:
                     probed_short = ""
                     detail = ""
 
-                lookup = self._lookup_full(probed_short, guessed)
-
                 # 식별 (4값) — service XML 노드 그대로 분석
                 identification = compute_identification_status(svc_el)
 
-                # 비고 — detail + NSE key-line 1~2개 (멀티라인 X)
+                # 비고 — NSE key-line 1~2개 (detail 은 별도 컬럼)
                 scripts = port.findall("script")
-                nse_data = [(sc.get("id", "") or "", sc.get("output", "") or "") for sc in scripts]
+                _script_ids = [sc.get("id", "") or "" for sc in scripts]
+                lookup = self._lookup_full(probed_short, guessed,
+                                           port_id=portid, script_ids=_script_ids)
+                nse_data = [(sc.get("id", "") or "", _decode_nse_output(sc.get("output", "") or "")) for sc in scripts]
                 remarks = compute_remarks(detail, nse_data)
 
                 # 한 포트 = 한 행 (이슈 3) — NSE 스크립트가 N 개여도 단일 row.

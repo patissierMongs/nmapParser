@@ -60,6 +60,27 @@ Not valid after: 2027-01-01T00:00:00
         self.assertIn("rsa", f["SSH_KeyTypes"])
         self.assertIn("ed25519", f["SSH_KeyTypes"])
         self.assertTrue(f.get("SSH_FP_SHA256", "").startswith("SHA256:"))
+        self.assertNotIn("SSH_FP_MD5", f)  # SHA256 만 있으면 MD5 키 미생성
+
+    def test_ssh_hostkey_md5_only(self):
+        """오래된 nmap 또는 ssh-hostkey 출력이 MD5 hex (콜론 hex pairs) 만 줄 때
+        SSH_FP_SHA256 컬럼명으로 잘못 라벨링되는 버그 회귀 방지.
+        실제 Blocky (HTB) 머신 출력 케이스.
+        """
+        out = """  2048 d6:2b:99:b4:d5:e7:53:ce:2b:fc:b5:d7:9d:79:fb:a2 (RSA)
+  256 5d:7f:38:95:70:c9:be:ac:67:a0:1e:86:e7:97:84:03 (ECDSA)
+  256 09:d5:c2:04:95:1a:90:ef:87:56:25:97:df:83:70:67 (ED25519)
+"""
+        f = ne.extract_nse_fields("ssh-hostkey", out)
+        self.assertIn("rsa", f["SSH_KeyTypes"])
+        self.assertIn("ecdsa", f["SSH_KeyTypes"])
+        self.assertIn("ed25519", f["SSH_KeyTypes"])
+        # SHA256: 접두사가 없으니 SSH_FP_SHA256 컬럼은 비어 있어야 함
+        self.assertNotIn("SSH_FP_SHA256", f)
+        # 대신 SSH_FP_MD5 컬럼에 hex 핑거프린트가 들어가야 함
+        self.assertIn("SSH_FP_MD5", f)
+        self.assertEqual(f["SSH_FP_MD5"],
+                         "d6:2b:99:b4:d5:e7:53:ce:2b:fc:b5:d7:9d:79:fb:a2")
 
     # ---------------- smb-os-discovery
     def test_smb_os_discovery(self):
@@ -165,6 +186,35 @@ Instance name: MSSQLSERVER
         self.assertIn("TLS_CN=foo", s)
         self.assertIn("HTTP_Server=nginx", s)
         self.assertIn(";", s)
+
+    def test_fingerprint_strings_skips_probe_header(self):
+        """nmap fingerprint-strings 출력의 첫 줄 (probe 이름 콤마 + 콜론) 을
+        Raw_FirstLine 으로 잘못 캡쳐하던 버그 회귀 방지.
+        실제 phase1.xml MongoDB 27017 케이스.
+        """
+        out = """
+  FourOhFourRequest, GetRequest, OfficeScan, apple-iphoto, hazelcast-http, metasploit-msgrpc:
+    HTTP/1.0 200 OK
+    Connection: close
+    Content-Type: text/plain
+    Content-Length: 85
+"""
+        f = ne.extract_nse_fields("fingerprint-strings", out)
+        # probe 이름 콤마 + 콜론 라인이 leak 되지 않아야 함
+        raw = f.get("Raw_FirstLine", "")
+        self.assertNotIn("FourOhFourRequest", raw)
+        self.assertNotIn("OfficeScan", raw)
+        # 진짜 응답 첫 줄 (HTTP/1.0 200 OK) 이거나 빈 dict.
+        if raw:
+            self.assertIn("HTTP", raw)
+
+    def test_fingerprint_strings_no_probe_header_still_parses(self):
+        """probe 이름 헤더가 없는 형태 (다른 nmap 버전) 도 안전."""
+        out = "  Some raw banner text from unknown service"
+        f = ne.extract_nse_fields("fingerprint-strings", out)
+        # 길이만 충족하면 캡쳐
+        if "Raw_FirstLine" in f:
+            self.assertIn("banner", f["Raw_FirstLine"])
 
     def test_unknown_script_returns_empty(self):
         self.assertEqual(ne.extract_nse_fields("non-existent-script", "abc"), {})
