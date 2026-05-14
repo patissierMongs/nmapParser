@@ -61,10 +61,11 @@ class FinalXlsxWorkflowTests(unittest.TestCase):
                 "02_시간축히트맵",
                 "03_변경추적대장",
                 "04_조치이력",
-                "05_현재포트현황",
-                "06_NSE분해",
+                "05_현재Open포트",
+                "06_현재스캔전체",
                 "07_증적파일목록",
                 "08_서비스별확인설정",
+                "09_NSE분해",
             ])
 
     def test_heatmap_headers_are_decomposed_for_excel_filtering(self):
@@ -76,8 +77,9 @@ class FinalXlsxWorkflowTests(unittest.TestCase):
             ])
             headers = sheet["headers"]
             self.assertNotIn("IP:port/proto", headers)
-            for h in ("IP", "프로토콜", "포트", "포트번호정수", "현재상태", "마지막변경유형"):
+            for h in ("IP", "IP대역", "프로토콜", "포트", "현재상태", "마지막변경유형"):
                 self.assertIn(h, headers)
+            self.assertNotIn("포트번호정수", headers)
 
     def test_individual_xlsx_has_port_evidence_and_service_sheets(self):
         with tempfile.TemporaryDirectory() as td:

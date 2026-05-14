@@ -7,6 +7,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts"))
+
+import migrate_categories_to_13col
 import nmapParser as np
 import xlsx_io
 
@@ -76,6 +79,57 @@ class ConfigLoadingTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0, proc.stdout)
         self.assertIn("FAIL", proc.stdout)
         self.assertIn("필수 헤더", proc.stdout)
+
+    def test_options_default_writer_preserves_existing_user_layout(self):
+        path = self._xlsx([
+            ["담당자", "옵션", "스캔 옵션", "활성화", "빈열"],
+            ["홍길동", "-n", "DNS 역조회 안 함", "1", "사용자값"],
+        ])
+
+        np.write_default_options_xlsx(path)
+        rows = xlsx_io.read_xlsx(path)
+
+        self.assertEqual(rows[0], ["담당자", "옵션", "스캔 옵션", "활성화", "빈열"])
+        self.assertEqual(len(rows[1]), len(rows[0]))
+        self.assertEqual(rows[1][0], "")
+        self.assertEqual(rows[1][1], np.DEFAULT_OPTIONS[0][1])
+        self.assertEqual(rows[1][2], np.DEFAULT_OPTIONS[0][0])
+        self.assertEqual(rows[1][3], np.DEFAULT_OPTIONS[0][2])
+        self.assertEqual(rows[1][4], "")
+
+    def test_categories_default_writer_preserves_existing_user_layout(self):
+        path = self._xlsx([
+            ["점검자", "표준포트", "nmap서비스명", "분류", "점검메모", "빈열"],
+            ["홍길동", "22", "ssh", "원격관리", "확인", "사용자값"],
+        ])
+
+        np.write_default_categories_xlsx(path)
+        rows = xlsx_io.read_xlsx(path)
+
+        self.assertEqual(rows[0], ["점검자", "표준포트", "nmap서비스명", "분류", "점검메모", "빈열"])
+        self.assertEqual(len(rows[1]), len(rows[0]))
+        self.assertEqual(rows[1][0], "")
+        self.assertEqual(rows[1][1], "22")
+        self.assertEqual(rows[1][2], "ssh")
+        self.assertEqual(rows[1][3], "원격접속")
+        self.assertEqual(rows[1][4], "")
+        self.assertEqual(rows[1][5], "")
+
+    def test_categories_migration_preserves_existing_user_layout(self):
+        path = self._xlsx([
+            ["점검자", "포트", "서비스", "분류", "빈열"],
+            ["홍길동", "22", "ssh", "원격관리", "사용자값"],
+        ])
+
+        result = migrate_categories_to_13col.migrate_path(path)
+        rows = xlsx_io.read_xlsx(path)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(rows[0], ["점검자", "포트", "서비스", "분류", "빈열"])
+        self.assertEqual(rows[1], ["홍길동", "22", "ssh", "원격관리", "사용자값"])
+        self.assertEqual(len(rows[-1]), len(rows[0]))
+        self.assertEqual(rows[-1][0], "")
+        self.assertEqual(rows[-1][4], "")
 
 
 

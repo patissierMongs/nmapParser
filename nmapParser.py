@@ -537,12 +537,15 @@ def _exposure_guide_for(key):
     return ("", "", "", "")
 
 
-# categories.xlsx 13컬럼 권장 schema (첫 생성 시 사용 — 이후 사용자가 자유 이동/추가 가능)
+# categories.xlsx 권장 schema (첫 생성 시 사용 — 이후 사용자가 자유 이동/추가 가능)
 CATEGORIES_STD_COLUMNS = [
     "서비스명", "표준포트", "프로토콜", "분류", "용도", "위험도",
-    "암호화", "인증", "노출위험", "공격표면", "출처", "설명", "점검메모",
+    "노출위험", "공격표면", "출처", "설명", "점검메모",
 ]
+CATEGORIES_DISPLAY_COLUMNS = ["nmap서비스명"] + CATEGORIES_STD_COLUMNS[1:]
 CATEGORIES_REQUIRED = ("서비스명",)  # 누락 시 에러
+OPTIONS_DISPLAY_COLUMNS = ["스캔 옵션", "옵션", "활성화", "그룹", "상세설명"]
+OPTIONS_REQUIRED = ("스캔 옵션", "옵션", "활성화")
 
 # 현장 사용자는 Excel 헤더를 자기 용어로 바꾸는 일이 잦다. 내부 표준명은 유지하되
 # 흔한 별칭을 표준명으로 정규화해 열 순서/표기 차이에 덜 민감하게 만든다.
@@ -552,14 +555,14 @@ _HEADER_ALIASES = {
     "활성화": {"활성화", "사용", "사용여부", "enable", "enabled", "on/off", "on"},
     "그룹": {"그룹", "group", "라디오그룹", "선택그룹"},
     "상세설명": {"상세설명", "설명", "툴팁", "tooltip", "description", "desc"},
-    "서비스명": {"서비스명", "서비스", "service", "service name", "service_name"},
+    "서비스명": {"서비스명", "nmap서비스명", "nmap 서비스명", "서비스", "service", "service name", "service_name"},
     "표준포트": {"표준포트", "포트", "port", "standard port", "standard_port"},
     "프로토콜": {"프로토콜", "protocol", "proto"},
     "분류": {"분류", "category", "class"},
     "용도": {"용도", "usage", "use", "purpose"},
     "위험도": {"위험도", "위험", "risk", "severity"},
-    "암호화": {"암호화", "encryption", "crypto"},
-    "인증": {"인증", "auth", "authentication"},
+    "암호화": {"암호화", "encryption", "crypto"},  # 구버전 categories.xlsx 읽기 호환용
+    "인증": {"인증", "auth", "authentication"},  # 구버전 categories.xlsx 읽기 호환용
     "노출위험": {"노출위험", "노출 위험", "exposure", "exposure risk", "exposure_risk"},
     "공격표면": {"공격표면", "공격 표면", "attack surface", "attack_surface"},
     "출처": {"출처", "근거", "source", "reference", "ref"},
@@ -621,6 +624,57 @@ def _build_header_index(header, required, file_label, allowed=None):
     return col_idx, normalized, errors
 
 
+def _read_existing_header_for_layout(path):
+    """기존 xlsx 첫 행을 layout template 으로 읽는다. 없거나 비정상이면 None."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        rows = xlsx_io.read_xlsx(path)
+    except Exception:
+        return None
+    if not rows or not rows[0]:
+        return None
+    return [(c or "").strip() for c in rows[0]]
+
+
+def _row_for_header(header, allowed, values_by_canonical):
+    """현재 헤더 순서에 맞춰 한 행 생성. 사용자 추가/빈 컬럼은 빈 값으로 둔다."""
+    out = []
+    allowed_set = set(allowed)
+    for raw in header:
+        if not raw:
+            out.append("")
+            continue
+        canonical = _canonical_header_name(raw, allowed_set)
+        out.append(values_by_canonical.get(canonical, ""))
+    return out
+
+
+def _header_widths(header, default_widths_by_canonical, fallback=20):
+    widths = []
+    for raw in header:
+        canonical = _canonical_header_name(raw, set(default_widths_by_canonical)) if raw else ""
+        widths.append(default_widths_by_canonical.get(canonical, fallback))
+    return widths
+
+
+def _default_category_values(name, category, usage, desc):
+    row = _build_default_category_row(name, category, usage, desc)
+    values = dict(zip(CATEGORIES_STD_COLUMNS, row))
+    values["nmap서비스명"] = values.get("서비스명", "")
+    return values
+
+
+def _default_option_values(label, option, enabled, group, desc):
+    return {
+        "스캔 옵션": label,
+        "옵션": option,
+        "활성화": enabled,
+        "그룹": group,
+        "상세설명": desc,
+    }
+
+
 def default_categories_as_map():
     """DEFAULT_CATEGORIES + GUIDE dict 들 → load_categories_xlsx 와 같은 dict 포맷."""
     catmap = {}
@@ -652,42 +706,74 @@ def default_categories_as_map():
 
 
 def _build_default_category_row(name, category, usage, desc):
-    """13컬럼 권장 순서로 한 행 만듦. 코드 dict 에서 표준포트/프로토콜/암호화/인증/위험도 등 보충."""
+    """categories.xlsx 권장 순서로 한 행 만듦. 코드 dict 에서 표준포트/프로토콜/위험도 등 보충."""
     key = (name or "").strip().lower()
-    port, proto, encryption, auth = _protocol_guide_for(key)
+    port, proto, _encryption, _auth = _protocol_guide_for(key)
     risk, exposure, surface, source = _exposure_guide_for(key)
-    # std cols 순서: 서비스명, 표준포트, 프로토콜, 분류, 용도, 위험도, 암호화, 인증,
-    #                노출위험, 공격표면, 출처, 설명, 점검메모
-    return [name, port, proto, category, usage, risk, encryption, auth,
+    return [name, port, proto, category, usage, risk,
             exposure, surface, source, desc, ""]
 
 
-def write_default_categories_xlsx(path):
-    """categories.xlsx 가 없을 때 기본값으로 새 파일 작성 (13컬럼 권장 순서).
-    schema: 서비스명 / 표준포트 / 프로토콜 / 분류 / 용도 / 위험도 /
-            암호화 / 인증 / 노출위험 / 공격표면 / 출처 / 설명 / 점검메모
-    사용자는 이후 Excel 에서 컬럼 자유 이동/추가 가능 — reader 가 헤더 이름 기반."""
-    rows = [list(CATEGORIES_STD_COLUMNS)]
+def _iter_default_categories_dedup_port():
+    """기본 categories.xlsx 는 Excel 관리용이므로 동일 표준포트/프로토콜 행을 중복 노출하지 않는다."""
+    seen = set()
     for tup in DEFAULT_CATEGORIES:
         if len(tup) < 4:
             continue
+        key = (tup[0] or "").strip().lower()
+        port, proto, _encryption, _auth = _protocol_guide_for(key)
+        port_key = (port or "").strip()
+        proto_key = (proto or "").strip().upper()
+        dedupe_key = (port_key, proto_key) if port_key and proto_key else ("service", key)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        yield tup
+
+
+def write_default_categories_xlsx(path):
+    """categories.xlsx 기본값 작성.
+
+    기존 파일이 있으면 첫 행의 열 순서/사용자 추가·삭제 컬럼을 양식으로 보고
+    새 기본 행도 그 양식에 맞춘다. 사용자 추가 컬럼/빈 열은 값 채우지 않는다.
+    """
+    existing_header = _read_existing_header_for_layout(path)
+    if existing_header:
+        header = existing_header
+        allowed = list(CATEGORIES_STD_COLUMNS) + ["nmap서비스명"]
+        rows = [list(header)]
+        for tup in _iter_default_categories_dedup_port():
+            values = _default_category_values(tup[0], tup[1], tup[2], tup[3])
+            rows.append(_row_for_header(header, allowed, values))
+        widths = _header_widths(header, {
+            "서비스명": 20, "nmap서비스명": 20, "표준포트": 9, "프로토콜": 11,
+            "분류": 14, "용도": 12, "위험도": 8, "노출위험": 38,
+            "공격표면": 38, "출처": 36, "설명": 38, "점검메모": 26,
+        })
+        xlsx_io.write_xlsx(path, rows, col_widths=widths, numeric_columns=["표준포트"])
+        return
+
+    rows = [list(CATEGORIES_DISPLAY_COLUMNS)]
+    for tup in _iter_default_categories_dedup_port():
         rows.append(_build_default_category_row(tup[0], tup[1], tup[2], tup[3]))
-    # 컬럼 폭: 서비스명 / 표준포트 / 프로토콜 / 분류 / 용도 / 위험도 /
-    #          암호화 / 인증 / 노출위험 / 공격표면 / 출처 / 설명 / 점검메모
+    # 컬럼 폭: nmap서비스명 / 표준포트 / 프로토콜 / 분류 / 용도 / 위험도 /
+    #          노출위험 / 공격표면 / 출처 / 설명 / 점검메모
     xlsx_io.write_xlsx(path, rows,
-        col_widths=[20, 9, 11, 14, 12, 8, 22, 22, 38, 38, 36, 38, 26])
+        col_widths=[20, 9, 11, 14, 12, 8, 38, 38, 36, 38, 26],
+        numeric_columns=["표준포트"])
 
 
 def load_categories_xlsx(path):
     """
     categories.xlsx 파싱 — **헤더 이름 기반** (컬럼 위치 무관, 사용자가 Excel 에서 자유 이동 가능).
 
-    인식 헤더 (모두 선택, '서비스명' 만 필수):
-      서비스명, 표준포트, 프로토콜, 분류, 용도, 위험도, 암호화, 인증,
+    인식 헤더 (모두 선택, '서비스명'/'nmap서비스명' 만 필수):
+      nmap서비스명, 표준포트, 프로토콜, 분류, 용도, 위험도,
       노출위험, 공격표면, 출처, 설명, 점검메모
 
     구버전 호환 (헤더 일부 누락):
       누락된 컬럼은 SERVICE_PROTOCOL_GUIDE / SERVICE_EXPOSURE_GUIDE 코드 dict 에서 자동 보충.
+      구버전의 암호화/인증 컬럼은 읽을 수는 있지만 새 기본 파일에는 만들지 않는다.
     사용자 추가 비표준 컬럼 (예: '담당자', '점검일자') 은 무시 (저장 시 그대로 보존하려면 마이그 스크립트 사용).
 
     리턴: ({서비스명_lower: {...}}, errors)
@@ -875,11 +961,27 @@ DEFAULT_OPTIONS = [
 
 
 def write_default_options_xlsx(path):
-    """options.xlsx 가 없을 때 기본값으로 새 파일 작성 (모든 셀 shared string)."""
-    rows = [["스캔 옵션", "옵션", "활성화", "그룹", "상세설명"]]
+    """options.xlsx 기본값 작성.
+
+    기존 파일이 있으면 첫 행의 열 순서/사용자 추가·삭제 컬럼을 양식으로 보고
+    새 기본 행도 그 양식에 맞춘다. 사용자 추가 컬럼/빈 열은 값 채우지 않는다.
+    """
+    existing_header = _read_existing_header_for_layout(path)
+    if existing_header:
+        header = existing_header
+        rows = [list(header)]
+        for label, option, enabled, group, desc in DEFAULT_OPTIONS:
+            values = _default_option_values(label, option, enabled, group, desc)
+            rows.append(_row_for_header(header, OPTIONS_DISPLAY_COLUMNS, values))
+        widths = _header_widths(header, {
+            "스캔 옵션": 38, "옵션": 64, "활성화": 10, "그룹": 18, "상세설명": 80,
+        })
+        xlsx_io.write_xlsx(path, rows, col_widths=widths)
+        return
+
+    rows = [list(OPTIONS_DISPLAY_COLUMNS)]
     for label, option, enabled, group, desc in DEFAULT_OPTIONS:
         rows.append([label, option, enabled, group, desc])
-    # 컬럼 폭
     col_widths = [38, 64, 10, 18, 80]
     xlsx_io.write_xlsx(path, rows, col_widths=col_widths)
 
@@ -2973,14 +3075,15 @@ class NmapParserApp:
             return
 
         header = [(c or "").strip() for c in raw[0]]
-        # "옵션" 컬럼 (nmap 인자) 우선, 영문 fallback.
-        opt_col_idx = None
-        for cand in ("옵션", "option", "Option"):
-            if cand in header:
-                opt_col_idx = header.index(cand)
-                break
-        if opt_col_idx is None:
+        col_idx, _normalized, header_errors = _build_header_index(
+            header, ["옵션"], "options.xlsx",
+            allowed=OPTIONS_DISPLAY_COLUMNS,
+        )
+        if header_errors:
             return  # 헤더 비정상 — 재구성은 _reload_options 에 맡김
+        opt_col_idx = col_idx.get("옵션")
+        if opt_col_idx is None:
+            return
 
         existing_options = set()
         for r in raw[1:]:
@@ -3027,36 +3130,11 @@ class NmapParserApp:
             messagebox.showerror("options.xlsx 백업 실패", f"오류: {e}")
             return
 
-        # 새 행 = 헤더 너비에 맞춰 표준 4컬럼 + 사용자 추가 컬럼은 빈 문자열.
-        # 표준 컬럼: 스캔 옵션(라벨) / 옵션 / 활성화 / 그룹 / 설명. 헤더 인덱스로 매핑.
-        std_keys = {
-            "스캔 옵션": 0, "스캔옵션": 0, "label": 0, "Label": 0,
-            "옵션": 1, "option": 1, "Option": 1,
-            "활성화": 2, "enabled": 2, "Enabled": 2,
-            "그룹": 3, "group": 3, "Group": 3,
-            "설명": 4, "desc": 4, "Desc": 4, "Description": 4,
-        }
-        col_map = {}
-        for i, h in enumerate(header):
-            key = std_keys.get(h)
-            if key is not None and key not in col_map:
-                col_map[key] = i
-
-        # 누락된 옵션 추가
+        # 새 행 = 현재 헤더 너비/순서에 맞춤. 사용자가 추가한 컬럼과 빈 열은 비워 둔다.
         new_rows_to_append = []
         for label, option, enabled, group, desc in missing:
-            row = [""] * len(header)
-            if 0 in col_map:
-                row[col_map[0]] = label
-            if 1 in col_map:
-                row[col_map[1]] = option
-            if 2 in col_map:
-                row[col_map[2]] = "0"  # 사용자 결정 — 기본 꺼짐.
-            if 3 in col_map:
-                row[col_map[3]] = group or ""
-            if 4 in col_map:
-                row[col_map[4]] = desc or ""
-            new_rows_to_append.append(row)
+            values = _default_option_values(label, option, "0", group or "", desc or "")
+            new_rows_to_append.append(_row_for_header(header, OPTIONS_DISPLAY_COLUMNS, values))
 
         all_rows = list(raw) + new_rows_to_append
         try:
@@ -3074,7 +3152,7 @@ class NmapParserApp:
         )
 
     def _maybe_offer_categories_migration(self):
-        """categories.xlsx 헤더가 13컬럼 권장 schema 미만이면 popup 으로 안내.
+        """categories.xlsx 헤더가 현재 권장 schema 미만이면 popup 으로 안내.
         Yes 면 migrate_categories_to_13col.migrate_path 호출. 사용자 컬럼·편집 보존.
         """
         path = self.categories_xlsx_path
@@ -3087,20 +3165,20 @@ class NmapParserApp:
         if not raw or not raw[0]:
             return
 
-        # 13개 표준 컬럼: 서비스명/표준포트/프로토콜/분류/용도/위험도/암호화/인증/노출위험/공격표면/출처/설명/점검메모
-        std = ["서비스명", "표준포트", "프로토콜", "분류", "용도", "위험도",
-               "암호화", "인증", "노출위험", "공격표면", "출처", "설명", "점검메모"]
+        # 현재 표준 컬럼: nmap서비스명/표준포트/프로토콜/분류/용도/위험도/노출위험/공격표면/출처/설명/점검메모
+        std = list(CATEGORIES_STD_COLUMNS)
         header = [(c or "").strip() for c in raw[0]]
-        missing = [c for c in std if c not in header]
+        header_for_check = ["서비스명" if h == "nmap서비스명" else h for h in header]
+        missing = [c for c in std if c not in header_for_check]
         if not missing:
-            return  # 이미 13컬럼
+            return  # 이미 현재 schema
 
         # 위험 vs 효용 안내. 사용자 동의 시에만 실행.
         ask = messagebox.askyesno(
-            "categories.xlsx 13컬럼 schema 마이그레이션",
-            f"현재 categories.xlsx 헤더가 13컬럼 권장 schema 보다 부족합니다.\n\n"
+            "categories.xlsx schema 마이그레이션",
+            f"현재 categories.xlsx 헤더가 권장 schema 보다 부족합니다.\n\n"
             f"누락된 표준 컬럼: {', '.join(missing)}\n\n"
-            f"13컬럼 schema 로 변환할까요?\n"
+            f"현재 권장 schema 로 변환할까요?\n"
             f"  · 사용자 편집/추가 컬럼은 그대로 보존됩니다.\n"
             f"  · 기존 파일은 .bak.<timestamp> 로 백업됩니다.\n"
             f"  · 누락 표준 컬럼은 도구 기본값으로 채워집니다.\n\n"
@@ -3130,15 +3208,15 @@ class NmapParserApp:
             extras_msg = ("\n사용자 추가 컬럼 보존: " + ", ".join(extras)) if extras else ""
             messagebox.showinfo(
                 "마이그레이션 완료",
-                f"13컬럼 schema 로 변환되었습니다.\n\n"
+                f"현재 권장 schema 로 변환되었습니다.\n\n"
                 f"백업: {os.path.basename(result.get('backup') or '')}\n"
                 f"총 {result['total']}행 (새로 추가 {result['added']}개).{extras_msg}"
             )
         elif result.get("status") == "no_header":
             messagebox.showwarning(
                 "마이그레이션 보류",
-                "필수 헤더 '서비스명' 이 없어 자동 변환할 수 없습니다.\n"
-                "Excel 에서 '서비스명' 컬럼을 직접 만든 뒤 도구를 다시 시작하세요."
+                "필수 헤더 'nmap서비스명' 또는 '서비스명' 이 없어 자동 변환할 수 없습니다.\n"
+                "Excel 에서 'nmap서비스명' 컬럼을 직접 만든 뒤 도구를 다시 시작하세요."
             )
         elif result.get("status") in ("created", "empty"):
             messagebox.showinfo(

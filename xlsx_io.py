@@ -8,14 +8,15 @@
   접두가 붙거나 손상됩니다.
 
   네이티브 xlsx 의 **shared string** 셀 (`<c t="s"><v>3</v></c>` + sharedStrings.xml
-  엔트리) 은 Excel 이 절대 수식으로 해석하지 않습니다. 이 파일은 모든 데이터 셀을
-  shared string 으로 작성합니다 (Excel 자체 저장 형식과 동일).
+  엔트리) 은 Excel 이 절대 수식으로 해석하지 않습니다. 이 파일은 기본적으로 데이터 셀을
+  shared string 으로 작성하고, 호출자가 지정한 단순 숫자 컬럼만 Excel 숫자로 저장합니다
+  (포트/행 수 같은 필터·정렬용 숫자 컬럼).
 
 스키마:
   - 시트 1개 ("Sheet1")
   - 1행 = 헤더 (style 1, 굵게)
   - 그 외 모든 셀 = 일반 (style 0)
-  - 모든 데이터 셀 type = "s" (shared string)
+  - 지정 숫자 컬럼 외 데이터 셀 type = "s" (shared string)
 """
 
 import os
@@ -203,10 +204,42 @@ STYLES_XML = (
 
 # ---------------------------------------------------------------- writer
 
-def _build_sheet_xml(rows, shared_str_idx, col_widths=None):
+def _is_excel_number(value):
+    """숫자 타입으로 저장해도 안전한 단순 정수/소수인지 확인."""
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return False
+    return re.match(r"^-?(?:\d+|\d+\.\d+|\.\d+)$", text) is not None
+
+
+def _numeric_col_indexes(headers, numeric_columns):
+    if not numeric_columns:
+        return set()
+    out = set()
+    for col in numeric_columns:
+        if isinstance(col, int):
+            out.add(col)
+        elif col in headers:
+            out.add(headers.index(col))
+    return out
+
+
+def _append_cell_xml(parts, ref, val, shared_str_idx, style_attr="", numeric=False):
+    text = "" if val is None else str(val)
+    if numeric and _is_excel_number(text):
+        parts.append(f'<c r="{ref}"{style_attr}><v>{xml_escape(text.strip())}</v></c>')
+        return
+    if text not in shared_str_idx:
+        shared_str_idx[text] = len(shared_str_idx)
+    sidx = shared_str_idx[text]
+    parts.append(f'<c r="{ref}" t="s"{style_attr}><v>{sidx}</v></c>')
+
+
+def _build_sheet_xml(rows, shared_str_idx, col_widths=None, numeric_columns=None):
     """
     rows = list[list[str]]; 첫 행은 굵게 처리.
     shared_str_idx = {string -> index} (call 자가 채움)
+    numeric_columns = 숫자로 저장할 헤더명 또는 0-based 컬럼 번호 목록.
     OOXML element 순서: dimension -> sheetViews -> sheetFormatPr -> cols -> sheetData -> pageMargins.
     """
     n_rows = len(rows)
@@ -230,6 +263,9 @@ def _build_sheet_xml(rows, shared_str_idx, col_widths=None):
             )
         parts.append('</cols>')
 
+    headers = rows[0] if rows else []
+    numeric_col_idx = _numeric_col_indexes(headers, numeric_columns)
+
     parts.append('<sheetData>')
     for r_idx, row in enumerate(rows, start=1):
         style_attr = ' s="1"' if r_idx == 1 else ''
@@ -238,15 +274,8 @@ def _build_sheet_xml(rows, shared_str_idx, col_widths=None):
         for c_idx, val in enumerate(row):
             if val is None:
                 continue
-            text = "" if val is None else str(val)
-            # shared string 등록
-            if text not in shared_str_idx:
-                shared_str_idx[text] = len(shared_str_idx)
-            sidx = shared_str_idx[text]
             ref = col_letter(c_idx) + str(r_idx)
-            parts.append(
-                f'<c r="{ref}" t="s"{style_attr}><v>{sidx}</v></c>'
-            )
+            _append_cell_xml(parts, ref, val, shared_str_idx, style_attr, numeric=(r_idx > 1 and c_idx in numeric_col_idx))
         parts.append('</row>')
     parts.append('</sheetData>')
     parts.append('<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>')
@@ -275,17 +304,18 @@ def _build_shared_strings_xml(shared_str_idx):
     return ''.join(parts)
 
 
-def write_xlsx(path, rows, col_widths=None):
+def write_xlsx(path, rows, col_widths=None, numeric_columns=None):
     """
     rows 를 xlsx 로 저장 (atomic — tempfile + os.replace).
-    - 모든 셀이 shared string (t="s") → Excel 에서 '-Pn', '=foo', '@bar' 도 절대 수식 해석 안 됨.
+    - 기본은 shared string (t="s") → Excel 에서 '-Pn', '=foo', '@bar' 도 절대 수식 해석 안 됨.
+    - numeric_columns 로 지정한 데이터 셀은 안전한 숫자일 때 Excel 숫자 타입으로 저장.
     - 첫 행은 굵게.
     - col_widths 가 주어지면 그 너비 적용.
     - **atomic**: 같은 디렉토리에 임시 파일로 먼저 쓴 후 os.replace 로 한 번에 교체.
       쓰기 도중 UNC 끊김 / 디스크 가득참 / Excel 잠금 등에서 원본 손상 방지.
     """
     shared_str_idx = {}  # text -> index
-    sheet_xml = _build_sheet_xml(rows, shared_str_idx, col_widths)
+    sheet_xml = _build_sheet_xml(rows, shared_str_idx, col_widths, numeric_columns=numeric_columns)
     shared_strings_xml = _build_shared_strings_xml(shared_str_idx)
 
     parent = os.path.dirname(os.path.abspath(path))
@@ -542,6 +572,7 @@ def _build_multi_sheet_xml(sheet, shared_str_idx):
     cell_fills = sheet.get("cell_fills") or [[] for _ in body_rows]
     header_fill = sheet.get("header_fill", FILL_NONE)
     col_widths = sheet.get("col_widths")
+    numeric_col_idx = _numeric_col_indexes(headers, sheet.get("numeric_columns"))
 
     all_rows = [headers] + list(body_rows)
     n_rows = len(all_rows)
@@ -576,10 +607,6 @@ def _build_multi_sheet_xml(sheet, shared_str_idx):
         for c_idx, val in enumerate(row):
             if val is None:
                 continue
-            text = "" if val is None else str(val)
-            if text not in shared_str_idx:
-                shared_str_idx[text] = len(shared_str_idx)
-            sidx = shared_str_idx[text]
             ref = col_letter(c_idx) + str(r_idx)
 
             # cell-level fill 우선
@@ -590,7 +617,7 @@ def _build_multi_sheet_xml(sheet, shared_str_idx):
                     cell_xf = _fill_to_xf(row_cell_fills[c_idx])
 
             style_attr = f' s="{cell_xf}"' if cell_xf else ''
-            parts.append(f'<c r="{ref}" t="s"{style_attr}><v>{sidx}</v></c>')
+            _append_cell_xml(parts, ref, val, shared_str_idx, style_attr, numeric=(not is_header and c_idx in numeric_col_idx))
         parts.append('</row>')
     parts.append('</sheetData>')
     parts.append('<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>')

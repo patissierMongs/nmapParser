@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-categories.xlsx 를 13컬럼 권장 schema 로 마이그레이션 (사용자 추가 컬럼 보존).
+categories.xlsx 를 현재 권장 schema 로 마이그레이션 (사용자 추가 컬럼 보존).
 
-13컬럼 권장 순서:
-  서비스명 / 표준포트 / 프로토콜 / 분류 / 용도 / 위험도 /
-  암호화 / 인증 / 노출위험 / 공격표면 / 출처 / 설명 / 점검메모
+현재 권장 순서:
+  nmap서비스명 / 표준포트 / 프로토콜 / 분류 / 용도 / 위험도 /
+  노출위험 / 공격표면 / 출처 / 설명 / 점검메모
 
 특징:
   - 헤더 이름 기반 — 기존 파일이 어떤 순서/컬럼이든 인식.
@@ -30,11 +30,10 @@ import xlsx_io  # noqa: E402
 import nmapParser  # noqa: E402
 
 
-# 13컬럼 권장 순서
-STD_COLUMNS = [
-    "서비스명", "표준포트", "프로토콜", "분류", "용도", "위험도",
-    "암호화", "인증", "노출위험", "공격표면", "출처", "설명", "점검메모",
-]
+# 현재 권장 순서
+STD_COLUMNS = list(nmapParser.CATEGORIES_STD_COLUMNS)
+DISPLAY_COLUMNS = list(nmapParser.CATEGORIES_DISPLAY_COLUMNS)
+LEGACY_DROP_COLUMNS = {"암호화", "인증"}
 
 
 def migrate_path(path):
@@ -58,15 +57,19 @@ def migrate_path(path):
 
     raw_header = [(c or "").strip() for c in raw_rows[0]]
     raw_data = raw_rows[1:]
-    raw_col_idx = {h: i for i, h in enumerate(raw_header) if h}
+    col_idx, _normalized_header, header_errors = nmapParser._build_header_index(
+        raw_header, ["서비스명"], "categories.xlsx", allowed=nmapParser.CATEGORIES_STD_COLUMNS
+    )
 
-    if "서비스명" not in raw_col_idx:
+    if header_errors:
         return {"status": "no_header", "backup": None, "total": 0, "added": 0,
                 "user_extra": [], "current_header": raw_header}
 
-    # 2) 새 헤더 = 권장 13컬럼 + 사용자가 추가한 비표준 컬럼 (순서 보존).
-    user_extra = [h for h in raw_header if h and h not in STD_COLUMNS]
-    new_header = list(STD_COLUMNS) + user_extra
+    # 2) 새 헤더 = 사용자가 편집한 현재 헤더 그대로.
+    #    열 이동/추가/삭제를 사용자의 양식으로 간주한다.
+    standard_aliases = set(STD_COLUMNS) | {"nmap서비스명"} | LEGACY_DROP_COLUMNS
+    user_extra = [h for h in raw_header if h and nmapParser._canonical_header_name(h, set(STD_COLUMNS)) not in standard_aliases]
+    new_header = list(raw_header)
 
     # 3) 백업
     ts = time.strftime("%Y%m%d-%H%M%S")
@@ -75,13 +78,19 @@ def migrate_path(path):
 
     # 4) 기존 데이터 → 새 헤더 순서로 재배열. 표준 컬럼 빈 칸은 코드 dict 에서 보충.
     def get_cell(row, col_name):
-        i = raw_col_idx.get(col_name)
+        i = col_idx.get(col_name)
         if i is None or i >= len(row):
             return ""
         v = row[i]
         return (v or "").strip() if v is not None else ""
 
-    seen = set()
+    def get_raw_cell(row, index):
+        if index >= len(row):
+            return ""
+        v = row[index]
+        return (v or "").strip() if v is not None else ""
+
+    seen_keys = set()
     new_rows = [new_header]
     for row in raw_data:
         if not row or all(not (c or "").strip() for c in row):
@@ -90,11 +99,10 @@ def migrate_path(path):
         if not name:
             continue
         key = name.lower()
-        seen.add(key)
 
         # 코드 dict 보충값
         guide_risk, guide_exposure, guide_surface, guide_source = nmapParser._exposure_guide_for(key)
-        guide_port, guide_proto, guide_encryption, guide_auth = nmapParser._protocol_guide_for(key)
+        guide_port, guide_proto, _guide_encryption, _guide_auth = nmapParser._protocol_guide_for(key)
         # DEFAULT_CATEGORIES 에서 분류/용도/설명 보충
         guide_cat = guide_usage = guide_desc = ""
         for tup in nmapParser.DEFAULT_CATEGORIES:
@@ -110,38 +118,53 @@ def migrate_path(path):
             "분류": get_cell(row, "분류") or guide_cat,
             "용도": get_cell(row, "용도") or guide_usage,
             "위험도": get_cell(row, "위험도") or guide_risk,
-            "암호화": get_cell(row, "암호화") or guide_encryption,
-            "인증": get_cell(row, "인증") or guide_auth,
             "노출위험": get_cell(row, "노출위험") or guide_exposure,
             "공격표면": get_cell(row, "공격표면") or guide_surface,
             "출처": get_cell(row, "출처") or guide_source,
             "설명": get_cell(row, "설명") or guide_desc,
             "점검메모": get_cell(row, "점검메모"),  # 사용자 입력 only — 빈 칸 보존
         }
-        # 사용자 추가 컬럼은 원본 값 그대로
-        out_row = [std_values[c] for c in STD_COLUMNS] + [get_cell(row, c) for c in user_extra]
+        port_key = ((std_values.get("표준포트") or "").strip(), (std_values.get("프로토콜") or "").strip().upper())
+        dedupe_key = port_key if port_key[0] and port_key[1] else ("service", key)
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        out_row = []
+        for idx, header_name in enumerate(new_header):
+            if not header_name:
+                out_row.append("")
+                continue
+            canonical = nmapParser._canonical_header_name(header_name, set(STD_COLUMNS))
+            if canonical in std_values:
+                out_row.append(std_values[canonical])
+            else:
+                out_row.append(get_raw_cell(row, idx))
         new_rows.append(out_row)
 
     # 5) DEFAULT_CATEGORIES 에서 새로 추가된 항목 append (기존 파일에 없던 service)
     added = 0
-    for tup in nmapParser.DEFAULT_CATEGORIES:
-        if len(tup) < 4:
-            continue
+    for tup in nmapParser._iter_default_categories_dedup_port():
         name, category, usage, desc = tup[0], tup[1], tup[2], tup[3]
         key = (name or "").strip().lower()
-        if not key or key in seen:
+        port, proto, _enc, _auth = nmapParser._protocol_guide_for(key)
+        port_key = ((port or "").strip(), (proto or "").strip().upper())
+        dedupe_key = port_key if port_key[0] and port_key[1] else ("service", key)
+        if not key or dedupe_key in seen_keys:
             continue
-        std_row = nmapParser._build_default_category_row(name, category, usage, desc)
-        # 사용자 추가 컬럼은 빈 값
-        out_row = std_row + [""] * len(user_extra)
+        values = nmapParser._default_category_values(name, category, usage, desc)
+        out_row = nmapParser._row_for_header(new_header, list(STD_COLUMNS) + ["nmap서비스명"], values)
         new_rows.append(out_row)
-        seen.add(key)
+        seen_keys.add(dedupe_key)
         added += 1
 
     # 6) atomic write (xlsx_io 의 내부 atomic 패턴)
-    col_widths_std = [20, 9, 11, 14, 12, 8, 22, 22, 38, 38, 36, 38, 26]
-    col_widths = col_widths_std + [20] * len(user_extra)
-    xlsx_io.write_xlsx(path, new_rows, col_widths=col_widths)
+    col_widths_std = {
+        "서비스명": 20, "nmap서비스명": 20, "표준포트": 9, "프로토콜": 11,
+        "분류": 14, "용도": 12, "위험도": 8, "노출위험": 38,
+        "공격표면": 38, "출처": 36, "설명": 38, "점검메모": 26,
+    }
+    col_widths = nmapParser._header_widths(new_header, col_widths_std)
+    xlsx_io.write_xlsx(path, new_rows, col_widths=col_widths, numeric_columns=["표준포트"])
     return {
         "status": "ok",
         "backup": backup,
@@ -160,8 +183,8 @@ def main():
     result = migrate_path(path)
     status = result["status"]
     if status == "no_header":
-        print(f"[migrate] 필수 헤더 '서비스명' 없음. 현재 헤더: {result.get('current_header')}")
-        print("[migrate] 사용자 파일을 보존하려면 수동으로 '서비스명' 컬럼을 만든 뒤 다시 실행.")
+        print(f"[migrate] 필수 헤더 'nmap서비스명' 또는 '서비스명' 없음. 현재 헤더: {result.get('current_header')}")
+        print("[migrate] 사용자 파일을 보존하려면 수동으로 'nmap서비스명' 컬럼을 만든 뒤 다시 실행.")
         return 1
     if status == "created":
         print(f"[migrate] 파일 없음 — 기본값으로 새로 생성: {path}")
@@ -172,7 +195,7 @@ def main():
     if status == "ok":
         if result["backup"]:
             print(f"[migrate] 백업: {result['backup']}")
-        print(f"[migrate] 13컬럼 schema 로 저장: {path}")
+        print(f"[migrate] 현재 권장 schema 로 저장: {path}")
         print(f"[migrate] 총 {result['total']}행 (새로 추가 {result['added']}개).")
         if result["user_extra"]:
             print(f"[migrate] 사용자 추가 컬럼 보존: {result['user_extra']}")

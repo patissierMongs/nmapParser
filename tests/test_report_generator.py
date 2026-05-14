@@ -85,7 +85,7 @@ class ReportGeneratorTests(unittest.TestCase):
                 wb = z.read("xl/workbook.xml").decode("utf-8")
                 for sheet_name in (
                     "00_보고요약", "01_스캔증적", "02_시간축히트맵", "03_변경추적대장",
-                    "04_조치이력", "05_현재포트현황", "06_NSE분해", "07_증적파일목록", "08_서비스별확인설정",
+                    "04_조치이력", "05_현재Open포트", "06_현재스캔전체", "07_증적파일목록", "08_서비스별확인설정", "09_NSE분해",
                 ):
                     self.assertIn(sheet_name, wb)
                 # 색칠 — styles.xml 에 fill RGB 들어 있어야
@@ -116,7 +116,8 @@ class ReportGeneratorTests(unittest.TestCase):
                 wb = z.read("xl/workbook.xml").decode("utf-8")
                 # 최종 workflow에서는 단일 CSV도 동일한 관리 시트 구성을 유지한다.
                 self.assertIn("03_변경추적대장", wb)
-                self.assertIn("05_현재포트현황", wb)
+                self.assertIn("05_현재Open포트", wb)
+                self.assertIn("06_현재스캔전체", wb)
 
     def test_generate_report_no_csv_raises(self):
         with tempfile.TemporaryDirectory() as td:
@@ -164,7 +165,7 @@ class ReportGeneratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             with open(os.path.join(td, "random_20260101_120000.csv"), "w", encoding="utf-8") as f:
                 f.write("name,value\nfoo,bar\n")
-            with self.assertRaisesRegex(ValueError, "유효한 nmapParser CSV"):
+            with self.assertRaisesRegex(ValueError, "유효한 nmapParser CSV|필수 열 누락"):
                 rg.generate_report(td, os.path.join(td, "report.xlsx"))
 
     def test_meta_sheet_includes_filename_and_encoding(self):
