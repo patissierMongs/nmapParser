@@ -1,8 +1,12 @@
-# Outputs created by scans (timestamped subfolders)
+# Outputs created by scans / reports / collection workflow
 [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9]*/
+_collected_*/
+collected/
+reports/
 
 # Backups
 *.bak
+*.bak.*
 options.csv.bak
 
 # Development screenshots (only screenshot_readme.png is committed)

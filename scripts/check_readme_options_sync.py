@@ -24,12 +24,22 @@ def extract_default_options_count(src: str) -> int:
 
 
 def extract_first_option_count_mention(text: str) -> int | None:
-    m = re.search(r"(\d+)\s*options", text, re.I)
-    if m:
-        return int(m.group(1))
-    m = re.search(r"(\d+)\s*개", text)
-    if m:
-        return int(m.group(1))
+    """문서의 DEFAULT_OPTIONS 개수 언급만 추출한다.
+
+    일반 문장(예: "파일 1개", "XML 1개")의 숫자를 옵션 개수로 오인하지 않도록
+    DEFAULT_OPTIONS 또는 기본/default options 주변의 숫자만 인정한다.
+    """
+    patterns = [
+        r"DEFAULT_OPTIONS\s*[=:]\s*(\d+)",
+        r"기본\s*옵션[^\n]{0,40}?(\d+)\s*개",
+        r"(\d+)\s*개[^\n]{0,40}?기본\s*옵션",
+        r"default\s+options[^\n]{0,40}?(\d+)\s*options",
+        r"(\d+)\s*default\s+options",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, re.I)
+        if m:
+            return int(m.group(1))
     return None
 
 

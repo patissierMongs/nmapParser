@@ -25,7 +25,8 @@ Two formats ship together on the Releases page (both x86 — run on 32-bit and 6
 | File | First-launch speed | Deployment | Best for |
 |---|---|---|---|
 | `nmapParser-x86.zip` (**recommended**) | **instant** | extract once | strict-AV / corporate machines, OneDrive-synced folders, network drives |
-| `nmapParser.exe` (single file) | 5–30s on first run | one file | personal PCs / one-shot use |
+| `nmapParser.exe` (single GUI file) | 5–30s on first run | one file | personal PCs / one-shot use |
+| `nmapParser-cli.exe` (console) | immediate CLI output | one file | `--check-config`, automation, troubleshooting |
 
 1. Install nmap: <https://nmap.org/download.html>
 2. Grab one of the files above from [Releases](https://github.com/patissierMongs/nmapParser/releases/latest).
@@ -105,10 +106,61 @@ Click `options.xlsx 열기 (Excel)` → edit → save → click `옵션 다시 �
 
 Both `options.xlsx` and `categories.xlsx` are read **by header name** — you can freely reorder columns or add your own (`담당자`, `점검일자`, `자산ID`, etc.) and the GUI keeps working.
 
-- **Required headers**: `서비스명` (categories), `스캔 옵션`/`옵션`/`활성화` (options). Missing → friendly Korean popup.
+- **Required headers**: `서비스명` (categories), `스캔 옵션`/`옵션`/`활성화` (options). Missing → friendly Korean popup or `--check-config` failure message.
+- **Common header aliases accepted**: `스캔옵션`, `옵션명`, `사용여부`, `설명`, `service`, `port`, `risk`, `memo`, etc. are normalized to standard headers.
+- **Duplicate header diagnostics**: alias-equivalent duplicates such as `스캔 옵션` + `옵션명` fail loudly instead of silently choosing one.
 - **Optional headers**: everything else. Missing standard columns are auto-filled from the in-code 105-service dict.
 - **Custom user columns**: ignored by GUI, preserved by the migration script.
 - **Backward compat**: 3/4/6/8-col `categories.xlsx` auto-detected. To force 13-col upgrade run `python scripts/migrate_categories_to_13col.py` (preserves user edits and custom columns, auto-backup).
+
+### Config preflight without GUI
+
+Before deploying to a site, or before a monthly check, validate config files from CLI:
+
+```bash
+# Validate options.xlsx / categories.xlsx in the current folder
+python nmapParser.py --check-config
+
+# Validate explicit files
+python nmapParser.py --check-config --options options.xlsx --categories categories.xlsx
+```
+
+Success example:
+```text
+[check-config] OK options.xlsx: 37 rows — options.xlsx
+[check-config] OK categories.xlsx: 105 services — categories.xlsx
+```
+Failures print `[check-config] FAIL ...` and return a non-zero exit code, so the command is suitable for deployment scripts/checklists.
+
+## Offline XML→CSV / base-vs-current Diff
+
+Existing nmap XML outputs can be converted and compared without scanning.
+
+```bash
+# XML file or folder -> CSV
+python nmapParser.py --xml2csv <input.xml_or_dir> --out <output_dir> --open-only
+
+# Base/current comparison (xml/csv can be mixed)
+python nmapParser.py --diff --base <base.xml_or_csv> --curr <curr.xml_or_csv> \
+                     --out <output_dir> --only-changes --out-format both
+
+# Multiple CSVs -> time-axis Excel report
+python nmapParser.py --report --csv-folder <csv_folder> --out <report.xlsx>
+
+# Config preflight
+python nmapParser.py --check-config --options <options.xlsx> --categories <categories.xlsx>
+
+# Optional: explicit categories.xlsx
+python nmapParser.py --xml2csv <input.xml_or_dir> --categories <categories.xlsx> --out <output_dir>
+```
+
+Generated diff files:
+- `diff_<base>_vs_<curr>_<timestamp>.csv` — detailed changes. `changed_fields` uses `state/service/detail/nse_or_script`.
+- `summary_<base>_vs_<curr>_<timestamp>.csv` — NEW_OPEN/CLOSED/CHANGED/UNCHANGED counts.
+- `snapshot_<curr>_<timestamp>.csv` — current snapshot.
+- `diff_<base>_vs_<curr>_<timestamp>.xlsx` — colored Excel when `--out-format xlsx|both`.
+
+CLI also prints `[diff] SUMMARY: NEW_OPEN=... CLOSED=... CHANGED=...` after each diff run.
 
 ## Reference command (`phase1`)
 
@@ -143,8 +195,10 @@ nmap -Pn -n -sS -sU -sV --version-all \
 - **categories.xlsx 13-column migration prompt** — header check at startup; missing cols → popup. Yes preserves user edits + custom columns; auto-backup.
 - **options.xlsx new-option auto-add prompt** — compares to DEFAULT_OPTIONS; missing → popup. Yes inserts as `enabled=0` (user decides).
 - **NIS (국정원) source citations** — KCMVP / Information Security Basic Guideline / Technical Safeguards Guideline added to the 출처 column. 4-source mapping (KISA + NIS + CIS + MITRE).
-- Misc: GUI override + GUI targets auto-merge, CSV collection dedup (hash + skip prior `_collected_/`), preflight strengthened, `_relocate_config_dir` None-safety.
-- Tests 37 passing (test_nse_extract / test_report_generator added).
+- **Config diagnostics CLI** — `--check-config --options <options.xlsx> --categories <categories.xlsx>` validates Excel aliases/duplicate headers/required columns without launching the GUI.
+- **Diff/report supportability** — diff CLI summary output, `changed_fields=nse_or_script` label, report Meta sheet records input filenames/encodings, Heatmap marks service-signature changes as changed.
+- Misc: GUI override + GUI targets auto-merge, CSV collection dedup (hash + skip prior `_collected_/`), preflight strengthened with config validation, `_relocate_config_dir` None-safety.
+- Tests 59 passing.
 </details>
 
 <details>

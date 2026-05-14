@@ -40,8 +40,15 @@ import html
 from datetime import datetime
 from dataclasses import dataclass, field
 
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+# GUI는 Windows/Tkinter 환경에서만 필요하다. XML->CSV / diff / report CLI는
+# GUI 없이도 돌아가야 하므로 tkinter 미설치 환경(예: CI, WSL headless)에서는
+# import 실패를 모듈 전체 실패로 만들지 않는다.
+try:
+    import tkinter as tk
+    from tkinter import ttk, filedialog, messagebox, scrolledtext
+except Exception:  # pragma: no cover - Windows 배포판에는 tkinter 포함
+    tk = None  # type: ignore
+    ttk = filedialog = messagebox = scrolledtext = None  # type: ignore
 
 # 동봉된 xlsx 헬퍼 (stdlib only)
 import xlsx_io
@@ -537,6 +544,82 @@ CATEGORIES_STD_COLUMNS = [
 ]
 CATEGORIES_REQUIRED = ("서비스명",)  # 누락 시 에러
 
+# 현장 사용자는 Excel 헤더를 자기 용어로 바꾸는 일이 잦다. 내부 표준명은 유지하되
+# 흔한 별칭을 표준명으로 정규화해 열 순서/표기 차이에 덜 민감하게 만든다.
+_HEADER_ALIASES = {
+    "스캔 옵션": {"스캔 옵션", "스캔옵션", "옵션명", "라벨", "label", "name"},
+    "옵션": {"옵션", "명령", "명령어", "인자", "nmap옵션", "nmap 옵션", "option", "argument"},
+    "활성화": {"활성화", "사용", "사용여부", "enable", "enabled", "on/off", "on"},
+    "그룹": {"그룹", "group", "라디오그룹", "선택그룹"},
+    "상세설명": {"상세설명", "설명", "툴팁", "tooltip", "description", "desc"},
+    "서비스명": {"서비스명", "서비스", "service", "service name", "service_name"},
+    "표준포트": {"표준포트", "포트", "port", "standard port", "standard_port"},
+    "프로토콜": {"프로토콜", "protocol", "proto"},
+    "분류": {"분류", "category", "class"},
+    "용도": {"용도", "usage", "use", "purpose"},
+    "위험도": {"위험도", "위험", "risk", "severity"},
+    "암호화": {"암호화", "encryption", "crypto"},
+    "인증": {"인증", "auth", "authentication"},
+    "노출위험": {"노출위험", "노출 위험", "exposure", "exposure risk", "exposure_risk"},
+    "공격표면": {"공격표면", "공격 표면", "attack surface", "attack_surface"},
+    "출처": {"출처", "근거", "source", "reference", "ref"},
+    "설명": {"설명", "description", "desc"},
+    "점검메모": {"점검메모", "메모", "note", "memo", "comment"},
+}
+
+
+def _normalize_header_token(value):
+    return re.sub(r"[\s_\-]+", "", (value or "").strip().lower())
+
+
+def _canonical_header_name(raw, allowed=None):
+    """헤더 별칭을 표준명으로 변환. allowed가 있으면 해당 설정파일의 컬럼만 고려."""
+    token = _normalize_header_token(raw)
+    candidates = []
+    for canonical, aliases in _HEADER_ALIASES.items():
+        if allowed is not None and canonical not in allowed:
+            continue
+        if token in {_normalize_header_token(alias) for alias in aliases}:
+            candidates.append(canonical)
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        # 같은 별칭이 여러 schema에 걸칠 때는 원문과 같은 표준명이 있으면 그것을 우선.
+        for canonical in candidates:
+            if token == _normalize_header_token(canonical):
+                return canonical
+        return candidates[0]
+    return (raw or "").strip()
+
+
+def _build_header_index(header, required, file_label, allowed=None):
+    """Excel 헤더를 표준명 -> 열 번호로 변환. 별칭/중복/누락을 진단한다."""
+    normalized = [(c or "").strip() for c in header]
+    col_idx = {}
+    errors = []
+    seen_raw = {}
+    allowed_set = set(allowed) if allowed is not None else None
+    for i, raw in enumerate(normalized):
+        if not raw:
+            continue
+        raw_key = _normalize_header_token(raw)
+        if raw_key in seen_raw:
+            errors.append(f"{file_label}: 중복 헤더 '{raw}' (열 {seen_raw[raw_key] + 1}, {i + 1})")
+            continue
+        seen_raw[raw_key] = i
+        canonical = _canonical_header_name(raw, allowed_set)
+        if canonical in col_idx:
+            errors.append(
+                f"{file_label}: 같은 의미의 헤더가 중복됨 — '{canonical}' "
+                f"(열 {col_idx[canonical] + 1}, {i + 1})"
+            )
+            continue
+        col_idx[canonical] = i
+    missing = [r for r in required if r not in col_idx]
+    if missing:
+        errors.append(f"{file_label} 필수 헤더 누락: {missing} (현재 헤더: {normalized})")
+    return col_idx, normalized, errors
+
 
 def default_categories_as_map():
     """DEFAULT_CATEGORIES + GUIDE dict 들 → load_categories_xlsx 와 같은 dict 포맷."""
@@ -618,15 +701,12 @@ def load_categories_xlsx(path):
     if not all_rows:
         return {}, ["categories.xlsx 가 비어 있음."]
 
-    header = [(c or "").strip() for c in all_rows[0]]
-    # 헤더 이름 → 컬럼 인덱스 (위치 무관)
-    col_idx = {h: i for i, h in enumerate(header) if h}
-
-    # 필수 컬럼 검증
-    for req in CATEGORIES_REQUIRED:
-        if req not in col_idx:
-            return {}, [f"필수 컬럼 '{req}' 가 categories.xlsx 헤더에 없음. "
-                        f"현재 헤더: {header}"]
+    # 헤더 이름/별칭 → 컬럼 인덱스 (위치 무관)
+    col_idx, header, header_errors = _build_header_index(
+        all_rows[0], CATEGORIES_REQUIRED, "categories.xlsx", allowed=CATEGORIES_STD_COLUMNS
+    )
+    if header_errors:
+        return {}, header_errors
 
     def cell(row, col_name, default=""):
         i = col_idx.get(col_name)
@@ -827,13 +907,13 @@ def load_options_xlsx(path):
     header = all_rows[0]
     if not header:
         return [], ["options.xlsx 의 헤더가 비어 있습니다."]
-    normalized = [(c or "").strip() for c in header]
-    # 헤더 이름 → 컬럼 인덱스 (위치 무관 — 사용자가 Excel 에서 컬럼 자유 이동 가능)
-    col_idx = {h: i for i, h in enumerate(normalized) if h}
     required = ["스캔 옵션", "옵션", "활성화"]
-    missing = [r for r in required if r not in col_idx]
-    if missing:
-        return [], [f"options.xlsx 필수 헤더 누락: {missing} (현재 헤더: {normalized})"]
+    col_idx, normalized, header_errors = _build_header_index(
+        header, required, "options.xlsx",
+        allowed=["스캔 옵션", "옵션", "활성화", "그룹", "상세설명"]
+    )
+    if header_errors:
+        return [], header_errors
 
     def cell(row, col_name, default=""):
         i = col_idx.get(col_name)
@@ -1136,6 +1216,285 @@ OPTION_CONFLICT_PREFIXES = [
     ("-sF", "-sA"),
     ("-sX", "-sA"),
 ]
+
+OVERRIDE_ARG_TAKING_OPTIONS = {
+    "-p", "-T", "--script", "--script-args", "--source-port", "-g", "-D",
+    "--max-retries", "--host-timeout", "--scan-delay", "--data-length", "--mtu",
+    "-S", "-e", "--ttl", "--exclude", "--excludefile", "-oA", "-oX", "-oN", "-oG",
+}
+
+
+def override_tokens_have_target(tokens):
+    """override 명령 토큰에 명시 타깃이 있는지 대략 판정.
+
+    목적은 타깃이 없을 때만 GUI 타깃을 뒤에 붙이는 것이다. nmap 옵션 전체를
+    완벽히 파싱하지 않고, 흔한 옵션 인자(-p 22, --script ssl-cert 등)를 타깃으로
+    오판하지 않는 선에서 보수적으로 처리한다.
+    """
+    ip_like_re = re.compile(r"^\d{1,3}(\.\d{1,3}){3}(/\d{1,3})?$")
+    host_like_re = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,253}$")
+    skip_next = False
+    for t in tokens:
+        low = (t or "").lower()
+        if skip_next:
+            skip_next = False
+            continue
+        if low in ("-il", "-ir"):
+            return True
+        key = low if low.startswith("--") else t
+        if key in OVERRIDE_ARG_TAKING_OPTIONS:
+            skip_next = True
+            continue
+        if low.startswith("--") and "=" in low:
+            continue
+        if t.startswith("-"):
+            continue
+        if ip_like_re.match(t) or host_like_re.match(t):
+            return True
+    return False
+
+
+def get_workspace_root(data_dir=None):
+    """파일 workflow 루트. env > data_dir > temp 순서로 결정한다."""
+    env_out = os.environ.get("NMAPPARSER_OUTPUT_DIR", "").strip()
+    if env_out:
+        return os.path.abspath(env_out)
+    if data_dir:
+        return os.path.abspath(data_dir)
+    return os.path.join(tempfile.gettempdir(), "nmapParser")
+
+
+def get_scans_dir(workspace_root):
+    return os.path.join(os.path.abspath(workspace_root), "scans")
+
+
+def get_collected_dir(workspace_root):
+    return os.path.join(os.path.abspath(workspace_root), "collected")
+
+
+def get_collected_latest_dir(workspace_root):
+    return os.path.join(get_collected_dir(workspace_root), "latest")
+
+
+def get_reports_dir(workspace_root):
+    return os.path.join(os.path.abspath(workspace_root), "reports")
+
+
+def default_scan_output_folder(data_dir=None, now=None):
+    """새 스캔 기본 출력 폴더: workspace/scans/<timestamp>."""
+    ts = (now or datetime.now()).strftime("%Y%m%d_%H%M%S")
+    return os.path.join(get_scans_dir(get_workspace_root(data_dir)), ts)
+
+
+def collect_csv_candidates(src_dir, dst_dir, exclude_dirs=None):
+    """CSV 취합 대상 선정: 관리 산출 폴더 제외 + 내용 hash 중복 제거."""
+    from pathlib import Path
+
+    src = Path(src_dir).resolve()
+    dst = Path(dst_dir).resolve()
+    excludes = []
+    for d in (exclude_dirs or []):
+        try:
+            excludes.append(Path(d).resolve())
+        except Exception:
+            pass
+
+    def is_under_excluded_dir(path_obj):
+        try:
+            rp = path_obj.resolve()
+        except Exception:
+            rp = path_obj
+        parents = set(rp.parents)
+        for ex in excludes:
+            if rp == ex or ex in parents:
+                return True
+        for parent in rp.parents:
+            name = parent.name
+            if name.startswith("_collected_") and len(name) > len("_collected_") + 4:
+                return True
+        return False
+
+    csv_paths = []
+    for p in sorted(src.rglob("*.csv")):
+        try:
+            rp = p.resolve()
+            if rp == dst or dst in rp.parents:
+                continue
+            if is_under_excluded_dir(rp):
+                continue
+        except Exception:
+            pass
+        if p.is_file():
+            csv_paths.append(p)
+
+    seen_hashes = set()
+    deduped = []
+    skipped_dup = 0
+    for p in csv_paths:
+        try:
+            h = hashlib.md5()
+            with open(str(p), "rb") as fh:
+                while True:
+                    b = fh.read(64 * 1024)
+                    if not b:
+                        break
+                    h.update(b)
+            digest = h.hexdigest()
+        except OSError:
+            try:
+                digest = f"{p.stem}-{p.stat().st_size}"
+            except OSError:
+                digest = str(p)
+        if digest in seen_hashes:
+            skipped_dup += 1
+            continue
+        seen_hashes.add(digest)
+        deduped.append(p)
+    return deduped, skipped_dup
+
+
+def collect_xml_candidates(src_dir, dst_dir, exclude_dirs=None):
+    """XML 취합 대상 선정: recursive 탐색 + 관리 산출 폴더 제외 + 내용 hash 중복 제거."""
+    from pathlib import Path
+
+    src = Path(src_dir).resolve()
+    dst = Path(dst_dir).resolve()
+    excludes = []
+    for d in (exclude_dirs or []):
+        try:
+            excludes.append(Path(d).resolve())
+        except Exception:
+            pass
+
+    def is_under_excluded_dir(path_obj):
+        try:
+            rp = path_obj.resolve()
+        except Exception:
+            rp = path_obj
+        parents = set(rp.parents)
+        for ex in excludes:
+            if rp == ex or ex in parents:
+                return True
+        for parent in rp.parents:
+            name = parent.name
+            if name.startswith("_collected_") and len(name) > len("_collected_") + 4:
+                return True
+        return False
+
+    xml_paths = []
+    for p in sorted(src.rglob("*.xml")):
+        try:
+            rp = p.resolve()
+            if rp == dst or dst in rp.parents:
+                continue
+            if is_under_excluded_dir(rp):
+                continue
+        except Exception:
+            pass
+        if p.is_file():
+            xml_paths.append(p)
+
+    seen_hashes = set()
+    deduped = []
+    skipped_dup = 0
+    for p in xml_paths:
+        try:
+            h = hashlib.md5()
+            with open(str(p), "rb") as fh:
+                while True:
+                    b = fh.read(64 * 1024)
+                    if not b:
+                        break
+                    h.update(b)
+            digest = h.hexdigest()
+        except OSError:
+            try:
+                digest = f"{p.stem}-{p.stat().st_size}"
+            except OSError:
+                digest = str(p)
+        if digest in seen_hashes:
+            skipped_dup += 1
+            continue
+        seen_hashes.add(digest)
+        deduped.append(p)
+    return deduped, skipped_dup
+
+
+def _unique_path(folder, filename):
+    stem, suffix = os.path.splitext(filename)
+    target = os.path.join(folder, filename)
+    idx = 2
+    while os.path.exists(target):
+        target = os.path.join(folder, f"{stem}_{idx}{suffix}")
+        idx += 1
+    return target
+
+
+def convert_xml_candidates_to_csv_bundle(xml_paths, dst_dir, open_only=False,
+                                         categories_xlsx_path=None, services_table=None):
+    """XML 목록을 dst_dir 에 CSV로 변환하고 같은 stem의 XML 증적도 복사한다."""
+    import shutil as _shutil
+
+    os.makedirs(dst_dir, exist_ok=True)
+    ok = 0
+    failed = []
+    outputs = []
+    for xml_path in xml_paths:
+        xml_path = os.fspath(xml_path)
+        base = os.path.splitext(os.path.basename(xml_path))[0]
+        try:
+            evidence_path = _unique_path(dst_dir, base + ".xml")
+            csv_path = os.path.splitext(evidence_path)[0] + ".csv"
+            _shutil.copy2(xml_path, evidence_path)
+            convert_xml_to_csv_standalone(
+                xml_path, csv_path,
+                open_only=open_only,
+                categories_xlsx_path=categories_xlsx_path,
+                services_table=services_table,
+            )
+            ok += 1
+            outputs.append((evidence_path, csv_path))
+        except (ET.ParseError, OSError, _shutil.Error) as e:
+            failed.append(f"{os.path.basename(xml_path)}: {e}")
+    return {"ok": ok, "failed": failed, "outputs": outputs}
+
+
+def refresh_latest_collected(src_dir, latest_dir):
+    """latest 폴더를 src_dir 의 CSV/XML 증적 묶음으로 교체. 실패 문자열 목록 반환."""
+    import shutil as _shutil
+    failures = []
+    try:
+        os.makedirs(latest_dir, exist_ok=True)
+    except OSError as e:
+        return [f"latest 폴더 생성 실패: {e}"]
+
+    try:
+        for name in os.listdir(latest_dir):
+            path = os.path.join(latest_dir, name)
+            if os.path.isfile(path):
+                try:
+                    os.remove(path)
+                except OSError as e:
+                    failures.append(f"{name} 삭제 실패: {e}")
+    except OSError as e:
+        failures.append(f"latest 폴더 정리 실패: {e}")
+
+    try:
+        names = sorted(os.listdir(src_dir))
+    except OSError as e:
+        return failures + [f"취합 폴더 읽기 실패: {e}"]
+    for name in names:
+        if not name.lower().endswith((".csv", ".xml", ".nmap", ".gnmap", ".log")):
+            continue
+        src_path = os.path.join(src_dir, name)
+        dst_path = os.path.join(latest_dir, name)
+        if not os.path.isfile(src_path):
+            continue
+        try:
+            _shutil.copy2(src_path, dst_path)
+        except (OSError, _shutil.Error) as e:
+            failures.append(f"{name} latest 복사 실패: {e}")
+    return failures
 
 
 def _app_dir():
@@ -1668,8 +2027,8 @@ def run_cli_xml2csv(args):
                 convert_xml_to_csv_standalone(xml_path, csv_path, open_only=args.open_only,
                                               categories_xlsx_path=args.categories,
                                               services_table=services_table)
-                ok_count += 1
                 print(f'[xml2csv] OK: {xml_path} -> {csv_path}')
+                ok_count += 1
             except (ET.ParseError, OSError) as e:
                 print(f'[xml2csv] FAIL: {xml_path} ({e})')
     finally:
@@ -1721,34 +2080,47 @@ def _set_system_awake(enable):
         pass
 
 
+def _open_csv_text_auto(csv_path):
+    """현장 CSV 인코딩 자동 처리: utf-8-sig/utf-8/cp949 순서."""
+    last_error = None
+    for enc in ("utf-8-sig", "utf-8", "cp949"):
+        try:
+            with open(csv_path, "r", encoding=enc, newline="") as f:
+                return list(csv.DictReader(f))
+        except UnicodeDecodeError as e:
+            last_error = e
+            continue
+    if last_error:
+        raise last_error
+    return []
+
+
 def parse_csv_rows_for_diff(csv_path):
     rows = []
-    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
-        r = csv.DictReader(f)
-        for row in r:
-            # 한국어 컬럼명 (도구가 출력하는 실제 헤더) 우선, 영문 fallback 은 v0.2 호환 / 외부 파이프라인용.
-            ip = (row.get("IP") or row.get("ip") or "").strip()
-            proto = ((row.get("프로토콜") or row.get("PROTO") or row.get("proto") or "").strip().lower())
-            port = (row.get("포트") or row.get("PORT") or row.get("port") or "").strip()
-            state = (row.get("포트상태") or row.get("STATE") or row.get("state") or "").strip().lower()
-            service = (row.get("확인서비스(short)") or row.get("확인서비스") or row.get("SERVICE") or row.get("service") or "").strip()
-            detail = (row.get("상세(제품/버전)") or row.get("상세") or row.get("DETAIL") or row.get("detail") or "").strip()
-            nse = (row.get("스크립트출력") or row.get("NSE") or row.get("nse") or "").strip()
-            # 24번째 컬럼: NSE추출 (key=value; ...) — 있을 때 digest 에 합산해 변경 감지 정밀도 향상.
-            nse_summary = (row.get("NSE추출") or "").strip()
-            if nse_summary:
-                nse = (nse + "\n" + nse_summary) if nse else nse_summary
-            if not (ip and proto and port):
-                continue
-            rows.append({
-                "ip": ip,
-                "proto": proto,
-                "port": str(port),
-                "state": state,
-                "service": service,
-                "detail": detail,
-                "digest": _digest_for_diff(service, detail, nse),
-            })
+    for row in _open_csv_text_auto(csv_path):
+        # 한국어 컬럼명 (도구가 출력하는 실제 헤더) 우선, 영문 fallback 은 v0.2 호환 / 외부 파이프라인용.
+        ip = (row.get("IP") or row.get("ip") or "").strip()
+        proto = ((row.get("프로토콜") or row.get("PROTO") or row.get("proto") or "").strip().lower())
+        port = (row.get("포트") or row.get("PORT") or row.get("port") or "").strip()
+        state = (row.get("포트상태") or row.get("STATE") or row.get("state") or "").strip().lower()
+        service = (row.get("확인서비스(short)") or row.get("확인서비스") or row.get("SERVICE") or row.get("service") or "").strip()
+        detail = (row.get("상세(제품/버전)") or row.get("상세") or row.get("DETAIL") or row.get("detail") or "").strip()
+        nse = (row.get("스크립트출력") or row.get("NSE") or row.get("nse") or "").strip()
+        # 24번째 컬럼: NSE추출 (key=value; ...) — 있을 때 digest 에 합산해 변경 감지 정밀도 향상.
+        nse_summary = (row.get("NSE추출") or "").strip()
+        if nse_summary:
+            nse = (nse + "\n" + nse_summary) if nse else nse_summary
+        if not (ip and proto and port):
+            continue
+        rows.append({
+            "ip": ip,
+            "proto": proto,
+            "port": str(port),
+            "state": state,
+            "service": service,
+            "detail": detail,
+            "digest": _digest_for_diff(service, detail, nse),
+        })
     return rows
 
 
@@ -1813,6 +2185,11 @@ def _safe_stem_for_path(path):
     stem = os.path.splitext(os.path.basename(path))[0]
     return re.sub(r'[^A-Za-z0-9._-]+', '_', stem) or 'file'
 
+def _changed_field_label(field):
+    """내부 diff 필드명을 비기술 사용자가 이해하기 쉬운 출력명으로 변환."""
+    return "nse_or_script" if field == "digest" else field
+
+
 def run_cli_diff(args):
     _set_system_awake(True)
     try:
@@ -1858,7 +2235,7 @@ def run_cli_diff(args):
             changed_fields_txt = ""
             if b is not None and c is not None:
                 changed_fields_txt = ",".join(
-                    fld for fld in ("state", "service", "detail", "digest")
+                    _changed_field_label(fld) for fld in ("state", "service", "detail", "digest")
                     if _normalize_for_diff(b.get(fld, "")) != _normalize_for_diff(c.get(fld, ""))
                 )
             diff_rows.append([
@@ -1881,6 +2258,8 @@ def run_cli_diff(args):
         snapshot_path = os.path.join(out_dir, f"snapshot_{curr_stem}_{stamp}.csv")
 
         out_format = (getattr(args, "out_format", None) or "both").lower()
+        if out_format not in ("csv", "xlsx", "both"):
+            raise ValueError(f"지원하지 않는 diff 출력 포맷: {out_format} (csv|xlsx|both 중 하나)")
         wrote_csv = out_format in ("csv", "both")
         wrote_xlsx = out_format in ("xlsx", "both")
 
@@ -1960,6 +2339,15 @@ def run_cli_diff(args):
                 # xlsx 쓰기 실패해도 CSV 는 살아있어야 — 경고만 출력
                 print(f"[diff] WARN: xlsx 쓰기 실패 ({e}), CSV 만 생성됨.")
 
+        print(
+            "[diff] SUMMARY: "
+            f"NEW_OPEN={summary['NEW_OPEN']} CLOSED={summary['CLOSED']} "
+            f"CHANGED={summary['CHANGED']} UNCHANGED={summary['UNCHANGED']} "
+            f"base={len(base_map)} curr={len(curr_map)}"
+        )
+        if not diff_rows:
+            print("[diff] no changes found")
+
         return 0
     finally:
         _set_system_awake(False)
@@ -2019,19 +2407,9 @@ class NmapParserApp:
         self.services_table = {}
         self._services_loaded = False
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # 스캔 산출 폴더 기본값:
-        #   1) NMAPPARSER_OUTPUT_DIR 환경변수
-        #   2) data_dir/<timestamp>
-        #   3) data_dir 가 None(메모리 모드) 이면 tempfile.gettempdir()/nmapParser/<ts>
-        env_out = os.environ.get("NMAPPARSER_OUTPUT_DIR", "").strip()
-        if env_out:
-            output_default = os.path.join(env_out, ts)
-        elif self.data_dir:
-            output_default = os.path.join(self.data_dir, ts)
-        else:
-            output_default = os.path.join(tempfile.gettempdir(), "nmapParser", ts)
-        self.output_folder = tk.StringVar(value=output_default)
+        # 스캔 산출 폴더 기본값: workspace/scans/<timestamp>
+        # workspace 는 NMAPPARSER_OUTPUT_DIR > data_dir > temp/nmapParser 순서로 결정.
+        self.output_folder = tk.StringVar(value=default_scan_output_folder(self.data_dir))
 
         self.scan_thread = None
         self.proc = None
@@ -2269,6 +2647,8 @@ class NmapParserApp:
         tk.Checkbutton(csv_frame, text="Diff 변경행만", variable=self.diff_only_changes).pack(side="left", padx=4, pady=2)
         tk.Button(csv_frame, text="XML 파일→CSV", command=self._convert_xml_file_dialog).pack(side="left", padx=4)
         tk.Button(csv_frame, text="XML 폴더 일괄→CSV", command=self._convert_xml_folder_dialog).pack(side="left", padx=4)
+        tk.Button(csv_frame, text="📂 XML 취합→CSV", command=self._collect_xml_dialog,
+                  bg="#fff3e0").pack(side="left", padx=4)
         tk.Button(csv_frame, text="기준/현재 비교(Diff)", command=self._run_diff_dialog).pack(side="left", padx=4)
         tk.Button(csv_frame, text="📂 CSV 취합", command=self._collect_csv_dialog,
                   bg="#e3f2fd").pack(side="left", padx=4)
@@ -3405,35 +3785,7 @@ class NmapParserApp:
                     tokens = tokens[1:]
             # 출력 플래그 제거 후 우리 -oA 강제 (CSV 파이프라인 보장).
             tokens = self.sanitize_output_args(tokens)
-            # override 박스에 타겟이 명시 안 되면 GUI 타겟 자동 append.
-            #   판단: -iL <file> / -iR / IP 토큰 (대략적 dotted-quad) / hostname-like 가 있으면 명시된 것으로 간주.
-            already_has_target = False
-            ip_like_re = re.compile(r"^\d{1,3}(\.\d{1,3}){3}(/\d{1,3})?$")
-            host_like_re = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,253}$")
-            i = 0
-            while i < len(tokens):
-                t = tokens[i]
-                low = t.lower()
-                if low in ("-il", "-ir"):
-                    already_has_target = True
-                    break
-                # 옵션 토큰 (-, --) 은 패스. 그 외 plain 토큰이면 IP/host 로 간주.
-                if not t.startswith("-") and (ip_like_re.match(t) or host_like_re.match(t)):
-                    # 단, 옵션의 인자 (예: -p 22) 는 제외 — 직전 토큰이 인자받는 옵션이면 skip.
-                    prev = tokens[i - 1] if i > 0 else ""
-                    arg_taking = {"-p", "-T", "-sn", "-sS", "-sT", "--script",
-                                  "--script-args", "--source-port", "-D",
-                                  "--max-retries", "--host-timeout", "--scan-delay",
-                                  "--data-length", "--mtu", "-S", "-e", "--ttl"}
-                    # arg-taking 옵션의 인자 자리는 plain 토큰일 수 있어 prev 가 그 옵션이면 skip.
-                    # (정확한 판단은 어렵지만 대표 케이스만 잡아 false-positive 줄임.)
-                    if prev not in arg_taking and not prev.startswith("--"):
-                        already_has_target = True
-                        break
-                i += 1
-
-            if not already_has_target and targets:
-                # 사용자에게 알림 — "GUI 타겟이 자동 추가됩니다" (override 인 줄 알아도 타겟은 누락 자주 일어남).
+            if not override_tokens_have_target(tokens) and targets:
                 tokens = list(tokens) + list(targets)
 
             try:
@@ -3637,13 +3989,13 @@ class NmapParserApp:
                 except Exception:
                     pass
 
-            # 진단 prelude: 사용자에게 GUI 가 살아 있음을 알려줌. AV / Defender 가
-            # CreateProcess 단계에서 수 초 hang 되어도 이 라인은 미리 표시됨.
-            self._log_queue.put("[nmapParser] 프로세스 시작 시도 "
-                                "(AV / 보안 정책 검사로 수 초 ~ 수십 초 지연 가능)...\n")
+            # 진단 prelude: 사용자에게 GUI 가 살아 있음을 알려줌.
+            # 보안 정책/AV 문구를 기본 노출하면 비숙련 사용자에게 불필요하게 겁을 주므로
+            # 정상적인 단계명만 표시한다. 실제 실패/무응답은 watchdog 에서 별도 안내.
+            self._log_queue.put("[nmapParser] nmap 프로세스 시작 중...\n")
             self.proc = subprocess.Popen(cmd, **kwargs)
             self._log_queue.put(
-                f"[nmapParser] 프로세스 시작됨 (PID {self.proc.pid}). nmap 출력 대기 중...\n")
+                f"[nmapParser] nmap 시작됨 (PID {self.proc.pid}). 출력 대기 중...\n")
             # 즉시 종료된 프로세스 검출 — 권한/경로 오류로 nmap 이 시작 직후 죽은 경우
             try:
                 rc_now = self.proc.poll()
@@ -3830,7 +4182,12 @@ class NmapParserApp:
                 break
         if lines:
             self._append_log_batch(lines)
-        if (self.proc and self.proc.poll() is None) or (not self._log_queue.empty()):
+        proc_alive = bool(self.proc and self.proc.poll() is None)
+        thread_alive = bool(self.scan_thread and self.scan_thread.is_alive())
+        # self.proc 가 세팅되기 전(Popen/CreateProcess 단계)에도 worker thread 는 살아 있다.
+        # 이 구간에서 pump 를 멈추면 이후 로그가 큐에 쌓여도 화면에 안 나오며,
+        # 사용자는 "starting" 에서 멈춘 것처럼 보게 된다.
+        if proc_alive or thread_alive or (not self._log_queue.empty()):
             self._log_pump_after_id = self.root.after(self._log_pump_interval_ms, self._pump_log_queue)
 
     def _stop_scan(self):
@@ -3956,7 +4313,7 @@ class NmapParserApp:
         )
         if not xml_path:
             return
-        out_dir = filedialog.askdirectory(title="CSV 출력 폴더 선택", initialdir=self.output_folder.get() or os.getcwd())
+        out_dir = filedialog.askdirectory(title="CSV 출력 폴더 선택", initialdir=get_scans_dir(get_workspace_root(self.data_dir)))
         if not out_dir:
             return
         try:
@@ -3978,7 +4335,7 @@ class NmapParserApp:
 
     def _convert_xml_folder_dialog(self):
         """스캔 없이 XML 폴더 일괄 변환."""
-        folder = filedialog.askdirectory(title="XML 폴더 선택", initialdir=self.output_folder.get() or os.getcwd())
+        folder = filedialog.askdirectory(title="XML 폴더 선택", initialdir=get_scans_dir(get_workspace_root(self.data_dir)))
         if not folder:
             return
         out_dir = filedialog.askdirectory(title="CSV 출력 폴더 선택", initialdir=folder)
@@ -4013,10 +4370,65 @@ class NmapParserApp:
             msg += "\n\n실패 목록:\n" + "\n".join(fails[:15])
         messagebox.showinfo("일괄 변환 결과", msg)
 
+    def _collect_xml_dialog(self):
+        """기존 XML 폴더를 recursive 취합해 CSV 보고서 입력 묶음으로 만든다."""
+        from datetime import datetime as _dt
+
+        src = filedialog.askdirectory(title="XML이 들어 있는 상위 폴더 선택 (하위 폴더 포함)")
+        if not src:
+            return
+        if not os.path.isdir(src):
+            messagebox.showerror("오류", f"폴더를 찾을 수 없습니다:\n{src}")
+            return
+
+        ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+        workspace = get_workspace_root(self.data_dir)
+        collected_root = get_collected_dir(workspace)
+        dst_dir = os.path.join(collected_root, ts)
+        latest_dir = get_collected_latest_dir(workspace)
+        try:
+            xml_paths, skipped_dup = collect_xml_candidates(
+                src, dst_dir,
+                exclude_dirs=[collected_root, get_reports_dir(workspace)],
+            )
+        except OSError as e:
+            messagebox.showerror("탐색 실패", f"XML 파일 탐색 중 오류:\n{e}")
+            return
+        if not xml_paths:
+            messagebox.showinfo("XML 없음", f"하위 폴더에 .xml 파일이 없습니다.\n경로: {src}")
+            return
+
+        _set_system_awake(True)
+        try:
+            self._ensure_services_table()
+            result = convert_xml_candidates_to_csv_bundle(
+                xml_paths, dst_dir,
+                open_only=self.csv_open_only.get(),
+                categories_xlsx_path=self.categories_xlsx_path,
+                services_table=self.services_table,
+            )
+            latest_failures = refresh_latest_collected(dst_dir, latest_dir) if result["ok"] else []
+        finally:
+            _set_system_awake(False)
+
+        failures = list(result.get("failed", [])) + latest_failures
+        msg = (f"XML 취합/CSV 변환 완료\n\n"
+               f"취합 폴더: {dst_dir}\n"
+               f"최신 취합: {latest_dir}\n"
+               f"변환된 XML: {result['ok']}개 (실패 {len(failures)}개, 중복 제외 {skipped_dup}개)\n\n"
+               f"이제 통합 리포트 버튼을 누르면 latest 기준으로 보고서를 생성합니다.")
+        if failures:
+            msg += "\n\n실패 (앞 10개):\n" + "\n".join(failures[:10])
+        messagebox.showinfo("XML 취합 결과", msg)
+        try:
+            if sys.platform == "win32":
+                os.startfile(dst_dir)  # type: ignore
+        except OSError:
+            pass
+
     def _collect_csv_dialog(self):
         """폴더 선택 → 하위 모든 *.csv 를 새 폴더로 복사 (recursive).
         시간축 누적 점검 결과를 한 폴더에 모으는 용도."""
-        from pathlib import Path
         import shutil as _shutil
         from datetime import datetime as _dt
 
@@ -4028,7 +4440,10 @@ class NmapParserApp:
             return
 
         ts = _dt.now().strftime("%Y%m%d_%H%M%S")
-        dst_dir = os.path.join(src, f"_collected_{ts}")
+        workspace = get_workspace_root(self.data_dir)
+        collected_root = get_collected_dir(workspace)
+        dst_dir = os.path.join(collected_root, ts)
+        latest_dir = get_collected_latest_dir(workspace)
         try:
             os.makedirs(dst_dir, exist_ok=True)
         except OSError as e:
@@ -4036,61 +4451,14 @@ class NmapParserApp:
                 f"수집 폴더를 만들 수 없습니다.\n경로: {dst_dir}\n원인: {e}")
             return
 
-        # recursive 하게 *.csv 찾기.
-        #   1) 방금 만든 dst_dir 자체 제외.
-        #   2) 같은 폴더 재실행 시 만들어진 이전 _collected_<ts>/ 폴더도 제외 (중복 누적 방지).
-        #   3) 파일 내용 hash 가 같으면 dedup (다른 위치에 같은 CSV 사본이 있을 때).
-        import hashlib as _hashlib
-
-        def _is_under_collected_dir(path_obj):
-            for parent in path_obj.parents:
-                name = parent.name
-                if name.startswith("_collected_") and len(name) > len("_collected_") + 4:
-                    return True
-            return False
-
         try:
-            csv_paths = []
-            for p in Path(src).rglob("*.csv"):
-                try:
-                    if Path(dst_dir) in p.parents:
-                        continue
-                    if _is_under_collected_dir(p):
-                        continue
-                except Exception:
-                    pass
-                if p.is_file():
-                    csv_paths.append(p)
+            csv_paths, skipped_dup = collect_csv_candidates(
+                src, dst_dir,
+                exclude_dirs=[collected_root, get_reports_dir(workspace)],
+            )
         except OSError as e:
             messagebox.showerror("탐색 실패", f"파일 탐색 중 오류:\n{e}")
             return
-
-        # hash dedup — 같은 stem 이라도 내용 다르면 둘 다, 같으면 첫 것만 보존.
-        seen_hashes = set()
-        deduped = []
-        skipped_dup = 0
-        for p in csv_paths:
-            try:
-                h = _hashlib.md5()
-                with open(str(p), "rb") as fh:
-                    while True:
-                        b = fh.read(64 * 1024)
-                        if not b:
-                            break
-                        h.update(b)
-                digest = h.hexdigest()
-            except OSError:
-                # hash 실패 시 stem+size 로 fallback
-                try:
-                    digest = f"{p.stem}-{p.stat().st_size}"
-                except OSError:
-                    digest = str(p)
-            if digest in seen_hashes:
-                skipped_dup += 1
-                continue
-            seen_hashes.add(digest)
-            deduped.append(p)
-        csv_paths = deduped
 
         if not csv_paths:
             messagebox.showinfo("CSV 없음", f"하위 폴더에 .csv 파일이 없습니다.\n경로: {src}")
@@ -4123,13 +4491,18 @@ class NmapParserApp:
             except (OSError, _shutil.Error) as e:
                 fail_list.append(f"{src_path.name}: {e}")
 
+        latest_failures = refresh_latest_collected(dst_dir, latest_dir) if copied else []
+        fail_list.extend(latest_failures)
+
         oldest_str = _dt.fromtimestamp(oldest).strftime("%Y-%m-%d %H:%M") if oldest else "—"
         newest_str = _dt.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M") if newest else "—"
         msg = (f"CSV 취합 완료\n\n"
-               f"수집 폴더: {dst_dir}\n"
-               f"수집된 CSV: {copied}개 (실패 {len(fail_list)}개, 중복 dedup {skipped_dup}개)\n"
+               f"취합 폴더: {dst_dir}\n"
+               f"최신 취합: {latest_dir}\n"
+               f"수집된 CSV: {copied}개 (실패 {len(fail_list)}개, 중복 제외 {skipped_dup}개)\n"
                f"가장 오래된 파일: {oldest_str}\n"
-               f"가장 최근 파일: {newest_str}")
+               f"가장 최근 파일: {newest_str}\n\n"
+               f"이제 통합 리포트 버튼을 누르면 latest 기준으로 보고서를 생성합니다.")
         if fail_list:
             msg += "\n\n실패 (앞 10개):\n" + "\n".join(fail_list[:10])
         messagebox.showinfo("CSV 취합 결과", msg)
@@ -4141,31 +4514,48 @@ class NmapParserApp:
             pass
 
     def _generate_report_dialog(self):
-        """GUI 에서 CSV 폴더를 선택해 5(or 6) 시트 시간축 xlsx 보고서 생성."""
-        folder = filedialog.askdirectory(
-            title="시간축 보고서 — CSV 폴더 선택 (여러 시점 *.csv 가 있는 디렉토리)"
-        )
-        if not folder:
-            return
+        """기본 결과 폴더에서 바로 통합 XLSX 보고서를 만들고 성공 시 파일을 연다."""
         try:
             import report_generator  # 지연 import
         except Exception as e:
             messagebox.showerror("보고서 생성 실패", f"report_generator 모듈 로드 실패: {e}")
             return
 
-        # 보고서 저장 위치 선택 (기본: 폴더 안 report_<ts>.xlsx)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_name = f"report_{ts}.xlsx"
-        out_path = filedialog.asksaveasfilename(
-            title="보고서 저장 위치",
-            initialdir=folder,
-            initialfile=default_name,
-            defaultextension=".xlsx",
-            filetypes=[("Excel xlsx", "*.xlsx")],
-        )
-        if not out_path:
-            return
+        workspace = get_workspace_root(self.data_dir)
+        latest = get_collected_latest_dir(workspace)
+        fallback = self.output_folder.get() or os.getcwd()
+        folder = latest
+        try:
+            csv_files = report_generator.collect_csv_files(folder) if os.path.isdir(folder) else []
+        except Exception:
+            csv_files = []
+        if not csv_files:
+            folder = fallback
+            try:
+                csv_files = report_generator.collect_csv_files(folder) if os.path.isdir(folder) else []
+            except Exception:
+                csv_files = []
+        if not csv_files:
+            picked = filedialog.askdirectory(
+                title="통합 리포트 — CSV가 있는 폴더 선택",
+                initialdir=fallback if os.path.isdir(fallback) else os.getcwd(),
+            )
+            if not picked:
+                return
+            folder = picked
+            try:
+                csv_files = report_generator.collect_csv_files(folder) if os.path.isdir(folder) else []
+            except Exception:
+                csv_files = []
 
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        reports_dir = get_reports_dir(workspace)
+        try:
+            os.makedirs(reports_dir, exist_ok=True)
+        except OSError as e:
+            messagebox.showerror("보고서 폴더 생성 실패", f"경로: {reports_dir}\n원인: {e}")
+            return
+        out_path = os.path.join(reports_dir, f"report_{ts}.xlsx")
         try:
             result = report_generator.generate_report(folder, out_path)
         except Exception as e:
@@ -4175,18 +4565,25 @@ class NmapParserApp:
         try:
             file_count = len(report_generator.collect_csv_files(folder))
         except Exception:
-            file_count = 0
+            file_count = len(csv_files)
         messagebox.showinfo(
             "보고서 생성 완료",
-            f"5(또는 6) 시트 xlsx 보고서가 생성되었습니다.\n\n"
+            f"Excel 통합 리포트가 생성되었습니다.\n\n"
+            f"입력 CSV 폴더: {folder}\n"
             f"입력 CSV: {file_count}개\n출력: {result}\n\n"
-            f"폴더가 자동으로 열립니다."
+            f"파일을 자동으로 엽니다."
         )
+        try:
+            if sys.platform == "win32":
+                os.startfile(result)  # type: ignore
+            return
+        except OSError:
+            pass
         try:
             if sys.platform == "win32":
                 os.startfile(os.path.dirname(result))  # type: ignore
         except OSError:
-            pass
+            messagebox.showinfo("파일 위치", f"보고서 경로:\n{result}")
 
     def _run_diff_dialog(self):
         """GUI에서 기준/현재 파일을 선택해 diff CSV 생성."""
@@ -4395,12 +4792,51 @@ class NmapParserApp:
         return csv_path
 
 
+def run_cli_check_config(args):
+    """options.xlsx/categories.xlsx 를 GUI 없이 검사하는 현장 진단용 CLI."""
+    targets = []
+    if args.options:
+        targets.append(("options.xlsx", args.options, load_options_xlsx, "rows"))
+    if args.categories:
+        targets.append(("categories.xlsx", args.categories, load_categories_xlsx, "services"))
+    if not targets:
+        cwd = os.getcwd()
+        default_options = os.path.join(cwd, OPTIONS_XLSX_NAME)
+        default_categories = os.path.join(cwd, CATEGORIES_XLSX_NAME)
+        if os.path.exists(default_options):
+            targets.append(("options.xlsx", default_options, load_options_xlsx, "rows"))
+        if os.path.exists(default_categories):
+            targets.append(("categories.xlsx", default_categories, load_categories_xlsx, "services"))
+    if not targets:
+        print("[check-config] FAIL: 검사할 설정 파일이 없습니다. --options 또는 --categories 를 지정하세요.")
+        return 2
+
+    failed = False
+    for label, path, loader, unit in targets:
+        if not os.path.exists(path):
+            print(f"[check-config] FAIL {label}: 파일 없음 — {path}")
+            failed = True
+            continue
+        data, errors = loader(path)
+        if errors:
+            print(f"[check-config] FAIL {label}: {path}")
+            for e in errors:
+                print(f"  - {e}")
+            failed = True
+        else:
+            print(f"[check-config] OK {label}: {len(data)} {unit} — {path}")
+    return 1 if failed else 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="nmapParser")
     parser.add_argument("--xml2csv", help="XML 파일 또는 XML 폴더를 CSV로 변환")
     parser.add_argument("--out", help="xml2csv 출력 폴더")
     parser.add_argument("--open-only", action="store_true", help="open 포트만 CSV 포함")
     parser.add_argument("--categories", help="categories.xlsx 경로 (선택)")
+    parser.add_argument("--options", help="options.xlsx 경로 (선택, --check-config 에서 사용)")
+    parser.add_argument("--check-config", action="store_true",
+                        help="options.xlsx/categories.xlsx 설정 파일을 GUI 없이 검사")
     parser.add_argument("--diff", action="store_true", help="기준/현재 파일 비교(diff) 실행")
     parser.add_argument("--base", help="diff 기준 파일 (.xml/.csv)")
     parser.add_argument("--curr", help="diff 현재 파일 (.xml/.csv)")
@@ -4416,6 +4852,9 @@ def main():
 
     if args.xml2csv:
         return run_cli_xml2csv(args)
+
+    if args.check_config:
+        return run_cli_check_config(args)
 
     if args.diff:
         if not args.base or not args.curr:
@@ -4433,6 +4872,10 @@ def main():
         except Exception as e:
             print(f"[report] FAIL: {e}")
             return 1
+
+    if tk is None or ttk is None:
+        print("[gui] FAIL: tkinter GUI를 사용할 수 없습니다. CLI 모드(--xml2csv/--diff/--report/--check-config)는 사용 가능합니다.")
+        return 1
 
     root = tk.Tk()
     try:

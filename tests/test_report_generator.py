@@ -4,10 +4,12 @@
 가짜 CSV 3개 (시점 다름) 생성 → generate_report → xlsx 시트 5~6개 + 색칠 정상.
 """
 
+import io
 import os
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 
 import report_generator as rg
 import xlsx_io
@@ -81,20 +83,21 @@ class ReportGeneratorTests(unittest.TestCase):
                 self.assertGreaterEqual(len(sheet_files), 5)
                 # workbook.xml 안에 시트 이름 확인
                 wb = z.read("xl/workbook.xml").decode("utf-8")
-                for sheet_name in ("현황", "히트맵", "변경이력", "위험도추이", "메타"):
+                for sheet_name in (
+                    "00_보고요약", "01_스캔증적", "02_시간축히트맵", "03_변경추적대장",
+                    "04_조치이력", "05_현재포트현황", "06_NSE분해", "07_증적파일목록", "08_서비스별확인설정",
+                ):
                     self.assertIn(sheet_name, wb)
-                # NSE추출 들어 있어 NSE상세 시트도 생성됨
-                self.assertIn("NSE상세", wb)
                 # 색칠 — styles.xml 에 fill RGB 들어 있어야
                 styles = z.read("xl/styles.xml").decode("utf-8")
                 self.assertIn("FFFFCDD2", styles, "NEW_OPEN red 색이 styles.xml 에 없음")
                 self.assertIn("FFFFF59D", styles, "CHANGED yellow 색이 styles.xml 에 없음")
                 # sharedStrings 에 "신규"/"유지" 토큰이 있어야 (히트맵 셀 값)
                 shared = z.read("xl/sharedStrings.xml").decode("utf-8")
-                self.assertIn("신규", shared, "히트맵에 '신규' 토큰 없음")
-                self.assertIn("유지", shared, "히트맵에 '유지' 토큰 없음")
-                # 히트맵 시트 (sheet2.xml) 에 색칠된 cell (s="2"=NEW_OPEN, s="3"=KEEP) 가 적용돼야
-                heatmap_xml = z.read("xl/worksheets/sheet2.xml").decode("utf-8")
+                self.assertIn("NEW_OPEN", shared, "히트맵에 'NEW_OPEN' 토큰 없음")
+                self.assertIn("KEEP", shared, "히트맵에 'KEEP' 토큰 없음")
+                # 히트맵 시트 (sheet3.xml) 에 색칠된 cell (s="2"=NEW_OPEN, s="3"=KEEP) 가 적용돼야
+                heatmap_xml = z.read("xl/worksheets/sheet3.xml").decode("utf-8")
                 self.assertTrue(
                     's="2"' in heatmap_xml or 's="3"' in heatmap_xml,
                     "히트맵 셀 색칠 (s=2 or s=3) 가 적용되지 않음"
@@ -111,9 +114,9 @@ class ReportGeneratorTests(unittest.TestCase):
             rg.generate_report(td, out)
             with zipfile.ZipFile(out) as z:
                 wb = z.read("xl/workbook.xml").decode("utf-8")
-                # 변경이력 시트는 없음 (시점 1개)
-                self.assertNotIn("변경이력", wb)
-                self.assertIn("현황", wb)
+                # 최종 workflow에서는 단일 CSV도 동일한 관리 시트 구성을 유지한다.
+                self.assertIn("03_변경추적대장", wb)
+                self.assertIn("05_현재포트현황", wb)
 
     def test_generate_report_no_csv_raises(self):
         with tempfile.TemporaryDirectory() as td:
@@ -138,6 +141,59 @@ class ReportGeneratorTests(unittest.TestCase):
             # 위험도 변경은 service 시그니처 변경 아님 → CHANGED 안 잡힐 수도. 그래서 약한 검증만.
             self.assertIn("NEW_OPEN", shared)
             self.assertIn("CLOSED", shared)
+
+    def test_heatmap_marks_service_signature_change(self):
+        with tempfile.TemporaryDirectory() as td:
+            p1 = os.path.join(td, "scan_20260101_120000.csv")
+            p2 = os.path.join(td, "scan_20260201_120000.csv")
+            with open(p1, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(_HEADER_24)
+                f.write(_row("10.0.0.1", "22", "open", "ssh", "OpenSSH 9.6", nse="SSH_FP_SHA256=a"))
+            with open(p2, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(_HEADER_24)
+                f.write(_row("10.0.0.1", "22", "open", "ssh", "OpenSSH 9.7", nse="SSH_FP_SHA256=b"))
+            out = os.path.join(td, "report.xlsx")
+            rg.generate_report(td, out)
+            with zipfile.ZipFile(out) as z:
+                shared = z.read("xl/sharedStrings.xml").decode("utf-8")
+                heatmap_xml = z.read("xl/worksheets/sheet3.xml").decode("utf-8")
+            self.assertIn("변경", shared)
+            self.assertIn('s="6"', heatmap_xml, "히트맵 변경 셀에 CHANGED 색이 적용되지 않음")
+
+    def test_generate_report_rejects_unparseable_csv(self):
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, "random_20260101_120000.csv"), "w", encoding="utf-8") as f:
+                f.write("name,value\nfoo,bar\n")
+            with self.assertRaisesRegex(ValueError, "유효한 nmapParser CSV"):
+                rg.generate_report(td, os.path.join(td, "report.xlsx"))
+
+    def test_meta_sheet_includes_filename_and_encoding(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._make_csvs(td)
+            out = os.path.join(td, "report.xlsx")
+            rg.generate_report(td, out)
+            with zipfile.ZipFile(out) as z:
+                shared = z.read("xl/sharedStrings.xml").decode("utf-8")
+            self.assertIn("encoding", shared)
+            self.assertIn("scan_20260101_120000.csv", shared)
+            self.assertIn("utf-8-sig", shared)
+
+    def test_run_cli_report_prints_summary(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._make_csvs(td)
+            class Args:
+                pass
+            args = Args()
+            args.csv_folder = td
+            args.out = os.path.join(td, "report.xlsx")
+            buf = io.StringIO()
+            with mock.patch("sys.stdout", buf):
+                rc = rg.run_cli_report(args)
+            self.assertEqual(rc, 0)
+            out = buf.getvalue()
+            self.assertIn("[report] OK:", out)
+            self.assertIn("[report] SUMMARY:", out)
+            self.assertIn("csv_files=3", out)
 
 
 if __name__ == "__main__":

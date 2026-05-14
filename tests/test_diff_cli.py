@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 import tempfile
 import unittest
@@ -35,6 +37,17 @@ class DiffEngineTests(unittest.TestCase):
             self.assertEqual(rows[0]["ip"], "10.0.0.1")
             self.assertEqual(rows[0]["proto"], "tcp")
             self.assertEqual(rows[0]["port"], "22")
+
+    def test_parse_csv_rows_for_diff_accepts_cp949(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "cp949.csv")
+            with open(p, "w", encoding="cp949", newline="") as f:
+                f.write("IP,PORT,프로토콜,포트상태,확인서비스(short),상세(제품/버전),스크립트출력\n")
+                f.write("10.0.0.1,22,tcp,open,ssh,OpenSSH 9.6,한글\n")
+            rows = np.parse_csv_rows_for_diff(p)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["ip"], "10.0.0.1")
+            self.assertEqual(rows[0]["service"], "ssh")
 
     def test_run_cli_diff_outputs(self):
         with tempfile.TemporaryDirectory() as td:
@@ -304,6 +317,84 @@ class DiffEngineTests(unittest.TestCase):
         with mock.patch("sys.argv", ["nmapParser.py", "--diff", "--base", "/no/base.csv", "--curr", "/no/curr.csv"]):
             rc = np.main()
         self.assertEqual(rc, 1)
+
+    def test_run_cli_diff_prints_summary_counts(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = os.path.join(td, "base.csv")
+            curr = os.path.join(td, "curr.csv")
+            header = "IP,프로토콜,포트,포트상태,확인서비스(short),상세(제품/버전),스크립트출력\n"
+            with open(base, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(header)
+                f.write("10.0.0.1,tcp,22,open,ssh,OpenSSH 9.6,\n")
+                f.write("10.0.0.1,tcp,80,open,http,nginx,\n")
+            with open(curr, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(header)
+                f.write("10.0.0.1,tcp,22,open,ssh,OpenSSH 9.7,\n")
+                f.write("10.0.0.1,tcp,443,open,https,nginx,\n")
+
+            class Args:
+                pass
+            args = Args()
+            args.base = base
+            args.curr = curr
+            args.out = td
+            args.only_changes = True
+            args.out_format = "csv"
+            buf = io.StringIO()
+            with mock.patch("sys.stdout", buf):
+                rc = np.run_cli_diff(args)
+            self.assertEqual(rc, 0)
+            out = buf.getvalue()
+            self.assertIn("[diff] SUMMARY:", out)
+            self.assertIn("NEW_OPEN=1", out)
+            self.assertIn("CLOSED=1", out)
+            self.assertIn("CHANGED=1", out)
+
+    def test_run_cli_diff_invalid_out_format_raises_value_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = os.path.join(td, "base.csv")
+            curr = os.path.join(td, "curr.csv")
+            header = "IP,프로토콜,포트,포트상태,확인서비스(short),상세(제품/버전),스크립트출력\n"
+            for p in (base, curr):
+                with open(p, "w", encoding="utf-8-sig", newline="") as f:
+                    f.write(header)
+                    f.write("10.0.0.1,tcp,22,open,ssh,OpenSSH 9.6,\n")
+            class Args:
+                pass
+            args = Args()
+            args.base = base
+            args.curr = curr
+            args.out = td
+            args.only_changes = True
+            args.out_format = "bogus"
+            with self.assertRaises(ValueError):
+                np.run_cli_diff(args)
+
+    def test_diff_changed_fields_labels_digest_as_nse_or_script(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = os.path.join(td, "base.csv")
+            curr = os.path.join(td, "curr.csv")
+            header = "IP,프로토콜,포트,포트상태,확인서비스(short),상세(제품/버전),스크립트출력\n"
+            with open(base, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(header)
+                f.write("10.0.0.1,tcp,22,open,ssh,OpenSSH 9.6,key-a\n")
+            with open(curr, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(header)
+                f.write("10.0.0.1,tcp,22,open,ssh,OpenSSH 9.6,key-b\n")
+            class Args:
+                pass
+            args = Args()
+            args.base = base
+            args.curr = curr
+            args.out = td
+            args.only_changes = True
+            args.out_format = "csv"
+            np.run_cli_diff(args)
+            diff_files = sorted(glob.glob(os.path.join(td, "diff_*.csv")))
+            with open(diff_files[-1], "r", encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.DictReader(f))
+            self.assertEqual(rows[0]["change_type"], "CHANGED")
+            self.assertEqual(rows[0]["changed_fields"], "nse_or_script")
 
 
 if __name__ == "__main__":

@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 REQUIRED_FLAGS = [
     "--xml2csv", "--diff", "--base", "--curr", "--out",
-    "--asset", "--only-changes", "--open-only", "--categories",
+    "--only-changes", "--open-only", "--categories",
+    "--options", "--check-config", "--out-format",
+    "--report", "--csv-folder",
 ]
 
 
@@ -16,7 +19,7 @@ def main() -> int:
     readme = Path(__file__).resolve().parents[1] / "README.md"
     text = readme.read_text(encoding="utf-8")
 
-    cp = subprocess.run(["python", "nmapParser.py", "--help"], capture_output=True, text=True)
+    cp = subprocess.run([sys.executable or "python3", "nmapParser.py", "--help"], capture_output=True, text=True)
     if cp.returncode != 0:
         print("[FAIL] nmapParser.py --help 실행 실패")
         print(cp.stderr)
