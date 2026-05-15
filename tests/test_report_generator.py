@@ -85,7 +85,7 @@ class ReportGeneratorTests(unittest.TestCase):
                 wb = z.read("xl/workbook.xml").decode("utf-8")
                 for sheet_name in (
                     "00_보고요약", "01_스캔증적", "02_시간축히트맵", "03_변경추적대장",
-                    "04_조치이력", "05_현재Open포트", "06_현재스캔전체", "07_증적파일목록", "08_서비스별확인설정", "09_NSE분해",
+                    "04_현재Open포트", "05_현재스캔전체", "06_증적파일목록", "07_서비스별확인설정",
                 ):
                     self.assertIn(sheet_name, wb)
                 # 색칠 — styles.xml 에 fill RGB 들어 있어야
@@ -116,8 +116,8 @@ class ReportGeneratorTests(unittest.TestCase):
                 wb = z.read("xl/workbook.xml").decode("utf-8")
                 # 최종 workflow에서는 단일 CSV도 동일한 관리 시트 구성을 유지한다.
                 self.assertIn("03_변경추적대장", wb)
-                self.assertIn("05_현재Open포트", wb)
-                self.assertIn("06_현재스캔전체", wb)
+                self.assertIn("04_현재Open포트", wb)
+                self.assertIn("05_현재스캔전체", wb)
 
     def test_generate_report_no_csv_raises(self):
         with tempfile.TemporaryDirectory() as td:

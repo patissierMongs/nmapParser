@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 """시간축 보고서 생성기 — CSV 폴더의 여러 시점 스캔 결과를 단일 xlsx 보고서로 합침.
 
-5(또는 6)시트 구성:
-  1. 현황      — 가장 최근 시점 CSV 24컬럼 그대로
-  2. 히트맵    — 행=IP:port/proto, 열=시점, 셀 색=상태 (신규/유지/닫힘/미관측)
-  3. 변경 이력  — 시점 i→i+1 (NEW_OPEN, CLOSED, CHANGED) 카운트
-  4. 위험도 추이 — 시점별 상/중/하 카운트
-  5. 메타      — CSV 파일 인덱스 + 명령 (있다면)
-  6. NSE 상세  — 가장 최근 시점의 NSE 추출 필드 펼침 (TLS_CN, SMB_OS, NTLM_Computer ...)
-                — NSE추출 컬럼이 비어 있으면 시트 자체를 생략
+Excel 추적/보고용 최종 시트 구성:
+  00_보고요약
+  01_스캔증적
+  02_시간축히트맵
+  03_변경추적대장
+  04_현재Open포트
+  05_현재스캔전체
+  06_증적파일목록
+  07_서비스별확인설정
 
 CLI:
   python nmapParser.py --report --csv-folder <폴더> [--out <xlsx>]
@@ -499,8 +500,46 @@ def _row_service(row):
     return _row_get(row, "확인서비스(short)", "확인서비스", "service").strip() or _row_get(row, "추측서비스").strip()
 
 
-def _parse_scope_targets(target_text):
-    """보고서용 최소 scope 파서. CIDR/IP만 확정 판정하고 복잡한 nmap 표현식은 UNKNOWN 처리."""
+def _parse_port_targets(port_text):
+    """nmap -p 형식의 최소 포트 scope 파서. 알 수 없는 표현식은 UNKNOWN 처리."""
+    ports = {"tcp": set(), "udp": set(), "any": set()}
+    unknown = False
+    current_proto = "any"
+    for raw in re.split(r"[,\s]+", port_text or ""):
+        token = raw.strip().strip('"\'')
+        if not token:
+            continue
+        proto = current_proto
+        if ":" in token:
+            prefix, rest = token.split(":", 1)
+            p = prefix.strip().upper()
+            if p == "T":
+                proto = current_proto = "tcp"
+                token = rest
+            elif p == "U":
+                proto = current_proto = "udp"
+                token = rest
+        token = token.strip()
+        if not token:
+            continue
+        if "-" in token:
+            start, end = token.split("-", 1)
+            if start.isdigit() and end.isdigit():
+                a, b = int(start), int(end)
+                if 1 <= a <= b <= 65535:
+                    ports[proto].update(str(p) for p in range(a, b + 1))
+                    continue
+            unknown = True
+            continue
+        if token.isdigit() and 1 <= int(token) <= 65535:
+            ports[proto].add(str(int(token)))
+        else:
+            unknown = True
+    return {"known": any(ports.values()), "ports": ports, "unknown": unknown, "raw": port_text or ""}
+
+
+def _parse_scope_targets(target_text, ports=None):
+    """보고서용 최소 scope 파서. CIDR/IP와 명시적 -p 포트만 확정 판정한다."""
     networks = []
     unknown = False
     for raw in re.split(r"[\s,;]+", target_text or ""):
@@ -514,9 +553,18 @@ def _parse_scope_targets(target_text):
             pass
         # 10.0.0.1-50 같은 nmap shorthand는 일부러 추정하지 않는다.
         unknown = True
+    port_scope = _parse_port_targets(ports)
+    scope = {
+        "known": bool(networks),
+        "networks": networks,
+        "raw": target_text or "",
+        "port_known": port_scope["known"],
+        "ports": port_scope["ports"],
+        "port_raw": port_scope["raw"],
+    }
     if not networks and unknown:
-        return {"known": False, "networks": [], "raw": target_text or ""}
-    return {"known": bool(networks), "networks": networks, "raw": target_text or ""}
+        scope["known"] = False
+    return scope
 
 
 def _ip_in_scope(ip, scope):
@@ -529,10 +577,23 @@ def _ip_in_scope(ip, scope):
     return any(addr in net for net in scope.get("networks", []))
 
 
+def _port_in_scope(port, proto, scope):
+    if not scope or not scope.get("port_known"):
+        return None
+    port = str(port or "").strip()
+    if port.isdigit():
+        port = str(int(port))
+    proto = (proto or "").strip().lower()
+    ports = scope.get("ports") or {}
+    return port in (ports.get("any") or set()) or port in (ports.get(proto) or set())
+
+
 def _scope_for_missing_key(label, key, scope_info=None):
-    ip, _proto, _port = _split_key(key)
-    in_scope = _ip_in_scope(ip, (scope_info or {}).get(label))
-    if in_scope is False:
+    ip, proto, port = _split_key(key)
+    scope = (scope_info or {}).get(label)
+    in_scope = _ip_in_scope(ip, scope)
+    port_in_scope = _port_in_scope(port, proto, scope)
+    if in_scope is False or port_in_scope is False:
         return "OUT_OF_SCOPE"
     return "UNOBSERVED"
 
@@ -649,39 +710,42 @@ def _all_observed_open_keys(per_tp):
 
 def _build_sheet_summary_final(snapshots, csv_folder, scope_info=None, file_meta=None):
     latest_label = snapshots[-1][0]
-    baseline_label = snapshots[-2][0] if len(snapshots) >= 2 else ""
     latest_rows = snapshots[-1][1]
     latest_csv = ""
     if file_meta:
         latest_csv = {label: fname for label, fname, _enc in file_meta}.get(latest_label, "")
     per_tp = _build_snapshot_maps(snapshots)
-    counts = {"NEW_OPEN": 0, "CHANGED": 0, "CLOSED": 0, "KEEP": 0, "UNOBSERVED": 0, "OUT_OF_SCOPE": 0}
-    for key in _all_observed_open_keys(per_tp):
-        change = _change_type_for_key(per_tp, key, scope_info=scope_info)
-        counts[change] = counts.get(change, 0) + 1
-    current_open = sum(1 for r in latest_rows if _state_for_row(r) == "open")
+    all_open_keys = _all_observed_open_keys(per_tp)
+    current_open_rows = [r for r in latest_rows if _state_for_row(r) == "open"]
+    current_open = len(current_open_rows)
+    current_total = sum(1 for r in latest_rows if _key_for_row(r))
+    cumulative_ips = { _split_key(k)[0] for k in all_open_keys }
+    current_open_ips = { _row_get(r, "IP") for r in current_open_rows if _row_get(r, "IP") }
+    current_non_open = sum(1 for r in latest_rows if _key_for_row(r) and _state_for_row(r) != "open")
     duplicate_count = _duplicate_port_count(snapshots)
     scope_missing = sum(1 for label, _rows in snapshots if not ((scope_info or {}).get(label) or {}).get("known"))
+    port_scope_missing = sum(1 for label, _rows in snapshots if not ((scope_info or {}).get(label) or {}).get("port_known"))
     headers = ["섹션", "항목", "값", "판단/사용 방법", "증적/연결 시트"]
     rows = [
-        ["보고 기준", "현재 스캔 시점", latest_label, "이 파일이 대표하는 관측 시점", "01_스캔증적"],
-        ["보고 기준", "비교 기준 시점", baseline_label, "NEW/CHANGED/CLOSED 판정 기준", "03_변경추적대장"],
-        ["보고 기준", "입력 폴더", csv_folder, "CSV 및 원본 증적 파일을 모으는 기본 결과 디렉터리", "07_증적파일목록"],
-        ["보고 기준", "최신 CSV 파일", latest_csv, "최신 open/전체 시트의 기준 파일", "05_현재Open포트, 06_현재스캔전체"],
-        ["지금 볼 항목", "현재 open 포트 수", str(current_open), "최신 스캔에서 open인 포트만 우선 확인", "05_현재Open포트"],
-        ["지금 볼 항목", "신규 Open", str(counts.get("NEW_OPEN", 0)), "담당자/승인근거 확인 필요", "03_변경추적대장"],
-        ["지금 볼 항목", "변경", str(counts.get("CHANGED", 0)), "서비스/상세/NSE 변경 사유 확인", "03_변경추적대장"],
-        ["지금 볼 항목", "닫힘", str(counts.get("CLOSED", 0)), "종결 또는 다음 스캔 재확인", "03_변경추적대장"],
-        ["지금 볼 항목", "미관측", str(counts.get("UNOBSERVED", 0)), "대상 포함 여부/스캔 누락 확인. 닫힘으로 단정 금지", "02_시간축히트맵"],
-        ["지금 볼 항목", "측정대상아님", str(counts.get("OUT_OF_SCOPE", 0)), "해당 시점 스캔 범위 밖. 조치 대상 아님", "02_시간축히트맵"],
-        ["데이터 품질 경고", "범위정보없음", str(scope_missing), "범위정보가 없으면 OUT_OF_SCOPE 판정 불가", "00_보고요약"],
+        ["보고 기준", "현재 스캔 시점", latest_label, "이번 보고서에서 우선 확인할 최신 관측 시점", "01_스캔증적"],
+        ["보고 기준", "입력 폴더", csv_folder, "CSV 및 원본 증적 파일을 모으는 기본 결과 디렉터리", "06_증적파일목록"],
+        ["보고 기준", "최신 CSV 파일", latest_csv, "이번 스캔 open/전체 시트의 기준 파일", "04_현재Open포트, 05_현재스캔전체"],
+        ["지금까지 스캔 통합", "스캔 파일 수", str(len(snapshots)), "보고서에 통합된 CSV 시점 수", "01_스캔증적"],
+        ["지금까지 스캔 통합", "누적 관측 포트 수", str(len(all_open_keys)), "한 번이라도 open으로 관측된 IP/프로토콜/포트 수", "02_시간축히트맵"],
+        ["지금까지 스캔 통합", "누적 관측 IP 수", str(len(cumulative_ips)), "한 번이라도 open 포트가 있었던 IP 수", "02_시간축히트맵"],
+        ["이번 스캔", "이번 스캔 전체 포트 행 수", str(current_total), "최신 CSV에서 확인된 전체 포트 상태 행", "05_현재스캔전체"],
+        ["이번 스캔", "이번 스캔 open 포트 수", str(current_open), "최신 스캔에서 open인 포트만 우선 확인", "04_현재Open포트"],
+        ["이번 스캔", "이번 스캔 open IP 수", str(len(current_open_ips)), "최신 스캔에서 open 포트가 있는 IP 수", "04_현재Open포트"],
+        ["이번 스캔", "이번 스캔 non-open 행 수", str(current_non_open), "closed/filtered 등 open이 아닌 최신 포트 상태 행", "05_현재스캔전체"],
+        ["데이터 품질 경고", "IP 범위정보없음", str(scope_missing), "IP 범위정보가 없으면 OUT_OF_SCOPE 판정이 제한됨", "00_보고요약"],
+        ["데이터 품질 경고", "포트 범위정보없음", str(port_scope_missing), "-p/스캔포트 정보가 없으면 포트 일부 스캔 여부 판정이 제한됨", "00_보고요약"],
         ["데이터 품질 경고", "중복 포트 행", str(duplicate_count), "동일 IP/프로토콜/포트 중복은 마지막 행 기준 처리", "01_스캔증적"],
-        ["상태 정의", "UNOBSERVED", "미관측", "대상일 수 있으나 해당 시점 결과 행이 없음. 닫힘 아님", "02_시간축히트맵"],
-        ["상태 정의", "OUT_OF_SCOPE", "측정대상아님", "스캔 범위 밖이라 조치/닫힘 판단 대상 아님", "02_시간축히트맵"],
-        ["Excel 사용", "추천 필터", "변경유형/위험도/담당자/처리상태/처리기한", "복합값을 분해해 필터/정렬 중심으로 사용", "02_시간축히트맵, 05_현재Open포트"],
+        ["상태 정의", "UNOBSERVED", "미관측", "해당 시점 스캔 대상일 수 있으나 결과 행이 없음. 닫힘 아님", "02_시간축히트맵"],
+        ["상태 정의", "OUT_OF_SCOPE", "측정대상아님", "해당 시점 IP 또는 포트 스캔 범위 밖. 닫힘/조치 대상으로 단정 금지", "02_시간축히트맵"],
+        ["Excel 사용", "추천 필터", "위험도/담당자/처리상태/처리기한", "통합 현황은 히트맵, 최신 확인은 현재 Open 포트 시트를 사용", "02_시간축히트맵, 04_현재Open포트"],
     ]
     return {"name": "00_보고요약", "headers": headers, "rows": rows, "header_fill": xlsx_io.FILL_HEADER,
-            "col_widths": [16, 22, 42, 64, 38]}
+            "col_widths": [18, 24, 42, 64, 38]}
 
 
 def _build_sheet_scan_evidence_final(snapshots, csv_folder, file_meta=None):
@@ -766,11 +830,6 @@ def _build_sheet_tracking_final(snapshots, file_meta=None, scope_info=None):
             "numeric_columns": _numeric_columns_for(headers)}
 
 
-def _build_sheet_action_history_final():
-    headers = ["관리ID", "기록일", "기록시각", "기록자", "이전상태", "변경상태", "조치분류", "조치/확인 내용", "근거자료", "다음 액션"]
-    return {"name": "04_조치이력", "headers": headers, "rows": [], "header_fill": xlsx_io.FILL_HEADER,
-            "col_widths": [18, 12, 12, 12, 12, 12, 14, 48, 28, 34]}
-
 
 def _build_sheet_current_ports_final(latest_label, latest_rows):
     csv_headers = list(REPORT_CSV_HEADERS)
@@ -797,7 +856,7 @@ def _build_sheet_current_ports_final(latest_label, latest_rows):
             except ValueError:
                 pass
         cell_fills.append(cf)
-    return {"name": "06_현재스캔전체", "headers": headers, "rows": rows, "cell_fills": cell_fills,
+    return {"name": "05_현재스캔전체", "headers": headers, "rows": rows, "cell_fills": cell_fills,
             "header_fill": xlsx_io.FILL_HEADER, "col_widths": [22, 12] + [14] * len(csv_headers) + [18] * len(nse_keys),
             "numeric_columns": _numeric_columns_for(headers)}
 
@@ -805,20 +864,8 @@ def _build_sheet_current_ports_final(latest_label, latest_rows):
 def _build_sheet_current_open_ports_final(latest_label, latest_rows):
     open_rows = [r for r in latest_rows if _state_for_row(r) == "open"]
     sheet = _build_sheet_current_ports_final(latest_label, open_rows)
-    sheet["name"] = "05_현재Open포트"
+    sheet["name"] = "04_현재Open포트"
     return sheet
-
-
-def _build_sheet_nse_rows_final(latest_label, latest_rows):
-    headers = ["scan_id", "IP", "호스트", "프로토콜", "포트", "서비스", "추출키", "추출값", "비고"]
-    rows = []
-    for r in latest_rows:
-        data = _parse_nse_summary(_row_get(r, "NSE추출"))
-        for k, v in data.items():
-            rows.append([latest_label, _row_get(r, "IP"), _row_get(r, "호스트"), _row_get(r, "프로토콜"), _row_get(r, "포트"), _row_service(r), k, v, ""])
-    return {"name": "09_NSE분해", "headers": headers, "rows": rows, "header_fill": xlsx_io.FILL_HEADER,
-            "col_widths": [22, 15, 14, 10, 8, 18, 22, 38, 24],
-            "numeric_columns": _numeric_columns_for(headers)}
 
 
 def _sha256_file(path):
@@ -847,7 +894,7 @@ def _build_sheet_file_list_final(csv_folder):
         stat = os.stat(p)
         stem = os.path.splitext(os.path.basename(p))[0]
         rows.append([f"FILE-{i:04d}", stem, os.path.basename(p), ext, kind.get(ext, "파일"), datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"), str(round(stat.st_size / 1024, 1)), _sha256_file(p), os.path.dirname(p), "OK", ""])
-    return {"name": "07_증적파일목록", "headers": headers, "rows": rows, "header_fill": xlsx_io.FILL_HEADER,
+    return {"name": "06_증적파일목록", "headers": headers, "rows": rows, "header_fill": xlsx_io.FILL_HEADER,
             "col_widths": [12, 24, 36, 10, 16, 20, 10, 66, 36, 12, 28],
             "numeric_columns": _numeric_columns_for(headers)}
 
@@ -864,17 +911,18 @@ def _build_sheet_service_settings_final():
         ["7", "UDP 주요 서비스 확인", "ON", "UDP", "snmp-info, ike-version, sip-methods, ntp-info", "SNMP_sysDescr, IKE_Version, SIP_Methods, NTP_Stratum", "SNMP/IKE/SIP/NTP 응답 확인", ""],
         ["8", "미식별 응답 확인", "ON", "기타", "fingerprint-strings", "Raw_FirstLine", "식별 실패 포트의 원본 응답 일부 확인", ""],
     ]
-    return {"name": "08_서비스별확인설정", "headers": headers, "rows": rows, "header_fill": xlsx_io.FILL_HEADER,
+    return {"name": "07_서비스별확인설정", "headers": headers, "rows": rows, "header_fill": xlsx_io.FILL_HEADER,
             "col_widths": [10, 24, 10, 16, 48, 48, 48, 28],
             "numeric_columns": _numeric_columns_for(headers)}
 
 
 def _load_scope_for_csv(csv_path, rows):
-    """CSV 메타 컬럼/sidecar/log에서 최소 target scope를 읽는다. 없으면 unknown."""
+    """CSV 메타 컬럼/sidecar/log에서 최소 target+port scope를 읽는다. 없으면 unknown."""
     for r in rows:
         target = _row_get(r, "스캔대상", "대상범위", "target", "targets", "scope").strip()
-        if target:
-            return _parse_scope_targets(target)
+        ports = _row_get(r, "스캔포트", "포트범위", "scan_ports", "port_scope", "ports").strip()
+        if target or ports:
+            return _parse_scope_targets(target, ports=ports)
     stem = os.path.splitext(csv_path)[0]
     for suffix in (".targets", ".scope", ".target.txt", ".targets.txt"):
         p = stem + suffix
@@ -893,19 +941,28 @@ def _load_scope_for_csv(csv_path, rows):
             if m:
                 tokens = shlex.split(m.group(1), posix=False)
                 targets = []
+                ports = ""
                 skip_next = False
-                for tok in tokens[1:]:
+                for i, tok in enumerate(tokens[1:], start=1):
                     if skip_next:
                         skip_next = False
                         continue
-                    if tok in ("-oA", "-oX", "-oN", "-oG", "-oS", "-iL", "-p", "--top-ports"):
+                    if tok == "-p":
+                        if i + 1 < len(tokens):
+                            ports = tokens[i + 1]
+                        skip_next = True
+                        continue
+                    if tok.startswith("-p") and len(tok) > 2:
+                        ports = tok[2:]
+                        continue
+                    if tok in ("-oA", "-oX", "-oN", "-oG", "-oS", "-iL", "--top-ports"):
                         skip_next = True
                         continue
                     if tok.startswith("-"):
                         continue
                     targets.append(tok)
-                if targets:
-                    return _parse_scope_targets(" ".join(targets))
+                if targets or ports:
+                    return _parse_scope_targets(" ".join(targets), ports=ports)
         except Exception:
             pass
     return _parse_scope_targets("")
@@ -918,12 +975,10 @@ def _build_final_report_sheets(snapshots, csv_folder, file_meta=None, scope_info
         _build_sheet_scan_evidence_final(snapshots, csv_folder, file_meta),
         _build_sheet_heatmap_final(snapshots, scope_info=scope_info),
         _build_sheet_tracking_final(snapshots, file_meta=file_meta, scope_info=scope_info),
-        _build_sheet_action_history_final(),
         _build_sheet_current_open_ports_final(latest_label, latest_rows),
         _build_sheet_current_ports_final(latest_label, latest_rows),
         _build_sheet_file_list_final(csv_folder),
         _build_sheet_service_settings_final(),
-        _build_sheet_nse_rows_final(latest_label, latest_rows),
     ]
 
 

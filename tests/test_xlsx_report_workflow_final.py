@@ -60,12 +60,10 @@ class FinalXlsxWorkflowTests(unittest.TestCase):
                 "01_스캔증적",
                 "02_시간축히트맵",
                 "03_변경추적대장",
-                "04_조치이력",
-                "05_현재Open포트",
-                "06_현재스캔전체",
-                "07_증적파일목록",
-                "08_서비스별확인설정",
-                "09_NSE분해",
+                "04_현재Open포트",
+                "05_현재스캔전체",
+                "06_증적파일목록",
+                "07_서비스별확인설정",
             ])
 
     def test_heatmap_headers_are_decomposed_for_excel_filtering(self):

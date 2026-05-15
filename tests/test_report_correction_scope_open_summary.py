@@ -77,8 +77,8 @@ class ReportCorrectionScopeOpenSummaryTests(unittest.TestCase):
         ]
         open_sheet = rg._build_sheet_current_open_ports_final("20260508_090000", latest)
         full_sheet = rg._build_sheet_current_ports_final("20260508_090000", latest)
-        self.assertEqual(open_sheet["name"], "05_현재Open포트")
-        self.assertEqual(full_sheet["name"], "06_현재스캔전체")
+        self.assertEqual(open_sheet["name"], "04_현재Open포트")
+        self.assertEqual(full_sheet["name"], "05_현재스캔전체")
         self.assertEqual(len(open_sheet["rows"]), 1)
         self.assertEqual(len(full_sheet["rows"]), 3)
         self.assertIn("open", open_sheet["rows"][0])
@@ -119,6 +119,52 @@ class ReportCorrectionScopeOpenSummaryTests(unittest.TestCase):
             rg._state_token_timeline(per_tp, "10.0.0.5:22/tcp", scope_info=same_scope)[0],
             ["NEW_OPEN", "UNOBSERVED"],
         )
+
+    def test_port_scope_distinguishes_not_scanned_port_from_unobserved(self):
+        snapshots = [
+            ("week1", [{"IP": "10.0.0.5", "프로토콜": "tcp", "포트": "22", "포트상태": "open", "확인서비스(short)": "ssh"}]),
+            ("week2", [{"IP": "10.0.0.5", "프로토콜": "tcp", "포트": "80", "포트상태": "open", "확인서비스(short)": "http"}]),
+        ]
+        per_tp = rg._build_snapshot_maps(snapshots)
+        port_80_only = {"week2": rg._parse_scope_targets("10.0.0.0/24", ports="80")}
+        self.assertEqual(
+            rg._state_token_timeline(per_tp, "10.0.0.5:22/tcp", scope_info=port_80_only)[0],
+            ["NEW_OPEN", "OUT_OF_SCOPE"],
+        )
+        port_22_included = {"week2": rg._parse_scope_targets("10.0.0.0/24", ports="22,80")}
+        self.assertEqual(
+            rg._state_token_timeline(per_tp, "10.0.0.5:22/tcp", scope_info=port_22_included)[0],
+            ["NEW_OPEN", "UNOBSERVED"],
+        )
+
+    def test_log_scope_parser_keeps_nmap_port_range(self):
+        with tempfile.TemporaryDirectory() as td:
+            csv_path = os.path.join(td, "scan_20260508_090000.csv")
+            _write_csv(csv_path, [_row("10.0.0.5", "80")])
+            with open(os.path.splitext(csv_path)[0] + ".log", "w", encoding="utf-8") as f:
+                f.write("[명령] nmap -sS -p 80,443 10.0.0.0/24 -oA scan_20260508_090000\n")
+            scope = rg._load_scope_for_csv(csv_path, rg._read_csv_rows(csv_path)[0])
+            self.assertTrue(rg._ip_in_scope("10.0.0.5", scope))
+            self.assertTrue(rg._port_in_scope("443", "tcp", scope))
+            self.assertFalse(rg._port_in_scope("22", "tcp", scope))
+
+    def test_report_summary_focuses_on_cumulative_and_current_scan_not_previous_baseline(self):
+        snapshots = [
+            ("week1", [{"IP": "10.0.0.1", "프로토콜": "tcp", "포트": "22", "포트상태": "open", "확인서비스(short)": "ssh"}]),
+            ("week2", [
+                {"IP": "10.0.0.1", "프로토콜": "tcp", "포트": "22", "포트상태": "open", "확인서비스(short)": "ssh"},
+                {"IP": "10.0.0.2", "프로토콜": "tcp", "포트": "80", "포트상태": "open", "확인서비스(short)": "http"},
+            ]),
+        ]
+        summary = rg._build_sheet_summary_final(snapshots, "/tmp/input")
+        summary_text = "\n".join("|".join(row) for row in summary["rows"])
+        self.assertIn("지금까지 스캔 통합", summary_text)
+        self.assertIn("누적 관측 포트 수", summary_text)
+        self.assertIn("이번 스캔", summary_text)
+        self.assertIn("이번 스캔 open 포트 수", summary_text)
+        self.assertNotIn("비교 기준 시점", summary_text)
+        self.assertNotIn("신규 Open", summary_text)
+        self.assertNotIn("변경|", summary_text)
 
     def test_duplicate_port_rows_are_reported_in_summary(self):
         snapshots = [
