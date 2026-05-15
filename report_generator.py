@@ -54,11 +54,16 @@ DISPLAY_HEADER_MAP = {
     "확인서비스": "스캔식별서비스",
 }
 NUMERIC_REPORT_COLUMNS = {"포트", "표준포트", "행 수", "크기_KB", "관측횟수", "변경횟수", "표시순서"}
+REPORT_SHEET_CSV_PREFIXES = (
+    "00_보고요약", "01_스캔증적", "02_시간축히트맵", "03_변경추적대장",
+    "04_현재Open포트", "05_현재스캔전체", "06_증적파일목록", "07_서비스별확인설정",
+)
 STATE_DISPLAY_KO = {
     "NEW_OPEN": "신규OPEN",
     "KEEP": "유지",
     "CHANGED": "변경",
     "CLOSED": "닫힘",
+    "FILTERED": "필터됨",
     "UNOBSERVED": "미관측",
     "OUT_OF_SCOPE": "대상아님",
 }
@@ -103,7 +108,11 @@ def _read_csv_rows_with_headers(csv_path):
         try:
             with open(csv_path, "r", encoding=enc, newline="") as f:
                 reader = csv.DictReader(f)
-                return list(reader), enc, list(reader.fieldnames or [])
+                headers = [str(h).strip() if h is not None else h for h in (reader.fieldnames or [])]
+                rows = []
+                for raw in reader:
+                    rows.append({str(k).strip() if k is not None else k: v for k, v in raw.items()})
+                return rows, enc, headers
         except UnicodeDecodeError:
             continue
     return [], "utf-8", []
@@ -464,8 +473,10 @@ def collect_csv_files(csv_folder):
     out = []
     for path in glob.glob(os.path.join(csv_folder, "*.csv")):
         base = os.path.basename(path).lower()
-        # diff CLI 결과물 제외
+        # diff CLI 및 보고서 시트 CSV 내보내기 결과물 제외
         if base.startswith(("diff_", "summary_", "snapshot_")):
+            continue
+        if any(base.startswith(prefix.lower()) for prefix in REPORT_SHEET_CSV_PREFIXES):
             continue
         out.append((path, _extract_timestamp(path)))
     out.sort(key=lambda x: (x[1], x[0]))
@@ -483,7 +494,7 @@ def collect_csv_files(csv_folder):
 def _split_key(key):
     """'ip:port/proto' 형태의 내부 키를 Excel 필터용 컬럼으로 분해."""
     try:
-        ip, rest = key.split(":", 1)
+        ip, rest = key.rsplit(":", 1)
         port, proto = rest.split("/", 1)
         return ip, proto, port
     except ValueError:
@@ -571,6 +582,7 @@ def _parse_scope_targets(target_text, ports=None):
         "known": bool(networks),
         "networks": networks,
         "raw": target_text or "",
+        "unknown": unknown,
         "port_known": port_scope["known"],
         "ports": port_scope["ports"],
         "port_raw": port_scope["raw"],
@@ -578,6 +590,56 @@ def _parse_scope_targets(target_text, ports=None):
     if not networks and unknown:
         scope["known"] = False
     return scope
+
+
+_SCOPE_ARG_TAKING_OPTIONS = {
+    "-p", "--top-ports", "--exclude", "--excludefile", "-iL", "-iR",
+    "-oA", "-oX", "-oN", "-oG", "-oS", "--script", "--script-args",
+    "--min-rate", "--max-rate", "--min-parallelism", "--max-parallelism",
+    "--min-hostgroup", "--max-hostgroup", "--max-retries", "--host-timeout",
+    "--scan-delay", "--max-scan-delay", "--stats-every", "--dns-servers",
+    "--datadir", "--version-intensity", "--source-port", "-g", "-S", "-e",
+    "--ttl", "--data-length", "--mtu", "-D",
+}
+
+
+def _scope_from_nmap_command(command_text):
+    """nmap 명령 문자열에서 보고서용 target/-p scope만 보수적으로 추출."""
+    try:
+        tokens = shlex.split(command_text or "", posix=False)
+    except ValueError:
+        return None
+    if tokens and os.path.basename(tokens[0]).lower() in ("nmap", "nmap.exe"):
+        tokens = tokens[1:]
+    targets = []
+    ports = ""
+    skip_next = False
+    for i, tok in enumerate(tokens):
+        if skip_next:
+            skip_next = False
+            continue
+        low = (tok or "").lower()
+        if tok == "-p":
+            if i + 1 < len(tokens):
+                ports = tokens[i + 1]
+            skip_next = True
+            continue
+        if tok.startswith("-p") and len(tok) > 2 and low not in ("-pn",):
+            ports = tok[2:]
+            continue
+        if "=" in tok and tok.startswith("--"):
+            opt, _val = tok.split("=", 1)
+            if opt in _SCOPE_ARG_TAKING_OPTIONS:
+                continue
+        if tok in _SCOPE_ARG_TAKING_OPTIONS:
+            skip_next = True
+            continue
+        if tok.startswith("-"):
+            continue
+        targets.append(tok)
+    if targets or ports:
+        return _parse_scope_targets(" ".join(targets), ports=ports)
+    return None
 
 
 def _ip_in_scope(ip, scope):
@@ -654,6 +716,9 @@ def _change_type_for_key(per_tp, key, scope_info=None):
         r = d.get(key)
         if r is None:
             last = _scope_for_missing_key(label, key, scope_info)
+            if last == "OUT_OF_SCOPE":
+                prev_open = False
+                prev_sig = ""
             continue
         state = _state_for_row(r)
         if state == "open":
@@ -664,8 +729,12 @@ def _change_type_for_key(per_tp, key, scope_info=None):
                 last = "NEW_OPEN"
             prev_open = True
             prev_sig = sig
-        elif state in ("closed", "filtered"):
-            last = "CLOSED" if prev_open else state.upper()
+        elif state == "closed":
+            last = "CLOSED" if prev_open else "CLOSED"
+            prev_open = False
+            prev_sig = ""
+        elif state == "filtered":
+            last = "FILTERED"
             prev_open = False
             prev_sig = ""
         else:
@@ -682,6 +751,9 @@ def _state_token_timeline(per_tp, key, scope_info=None):
         r = d.get(key)
         if r is None:
             token = _scope_for_missing_key(label, key, scope_info)
+            if token == "OUT_OF_SCOPE":
+                prev_open = False
+                prev_sig = ""
             tokens.append(token)
             fills.append(xlsx_io.FILL_UNOBSERVED)
             continue
@@ -696,9 +768,14 @@ def _state_token_timeline(per_tp, key, scope_info=None):
                 fill = xlsx_io.FILL_NEW_OPEN
             prev_open = True
             prev_sig = sig
-        elif state in ("closed", "filtered"):
-            token = "CLOSED" if prev_open else state.upper()
-            fill = xlsx_io.FILL_CLOSED if token == "CLOSED" else xlsx_io.FILL_NONE
+        elif state == "closed":
+            token = "CLOSED" if prev_open else "CLOSED"
+            fill = xlsx_io.FILL_CLOSED
+            prev_open = False
+            prev_sig = ""
+        elif state == "filtered":
+            token = "FILTERED"
+            fill = xlsx_io.FILL_NONE
             prev_open = False
             prev_sig = ""
         else:
@@ -938,18 +1015,32 @@ def _load_scope_from_xml(xml_path):
     except Exception:
         return None
 
-    targets = []
-    seen_targets = set()
-    for addr in root.findall(".//address"):
-        value = (addr.attrib.get("addr") or "").strip()
-        if not value or value in seen_targets:
-            continue
-        try:
-            ipaddress.ip_address(value)
-        except ValueError:
-            continue
-        seen_targets.add(value)
-        targets.append(value)
+    target_specs = [
+        (target.attrib.get("specification") or "").strip()
+        for target in root.findall("target")
+        if (target.attrib.get("specification") or "").strip()
+    ]
+    target_scope = _parse_scope_targets(" ".join(target_specs)) if target_specs else None
+    if target_scope and target_scope.get("known"):
+        targets = list(target_specs)
+        if target_scope.get("unknown"):
+            seen_targets = set(targets)
+            for addr in root.findall(".//address"):
+                value = (addr.attrib.get("addr") or "").strip()
+                if not value or value in seen_targets:
+                    continue
+                try:
+                    ipaddress.ip_address(value)
+                except ValueError:
+                    continue
+                seen_targets.add(value)
+                targets.append(value)
+    else:
+        args_scope = _scope_from_nmap_command(root.attrib.get("args", ""))
+        if args_scope is not None:
+            targets = [args_scope.get("raw", "")]
+        else:
+            targets = []
 
     port_parts = []
     for scaninfo in root.findall("scaninfo"):

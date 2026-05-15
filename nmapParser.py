@@ -1323,6 +1323,7 @@ OVERRIDE_ARG_TAKING_OPTIONS = {
     "-p", "-T", "--script", "--script-args", "--source-port", "-g", "-D",
     "--max-retries", "--host-timeout", "--scan-delay", "--data-length", "--mtu",
     "-S", "-e", "--ttl", "--exclude", "--excludefile", "-oA", "-oX", "-oN", "-oG",
+    "--top-ports", "--min-rate", "--max-rate", "--dns-servers",
 }
 
 
@@ -1348,6 +1349,8 @@ def override_tokens_have_target(tokens):
             skip_next = True
             continue
         if low.startswith("--") and "=" in low:
+            continue
+        if low.startswith(("-ox", "-on", "-og", "-oa")) and len(low) > 3:
             continue
         if t.startswith("-"):
             continue
@@ -2253,13 +2256,32 @@ def parse_xml_rows_for_diff(xml_path):
             detail = ""
             if svc_el is not None:
                 service = (svc_el.get("name", "") or "").strip()
+                method = (svc_el.get("method", "") or "").strip()
+                if method == "table" and service:
+                    service = f"{service}?"
                 product = svc_el.get("product", "") or ""
                 version = svc_el.get("version", "") or ""
                 extrainfo = svc_el.get("extrainfo", "") or ""
                 ostype = svc_el.get("ostype", "") or ""
                 detail = " ".join(p for p in (product, version, extrainfo, ostype) if p).strip()
             scripts = port.findall("script")
-            nse = "\n".join(_decode_nse_output(sc.get("output", "") or "") for sc in scripts)
+            output_lines = []
+            nse_data = []
+            for sc in scripts:
+                sid = sc.get("id", "") or ""
+                raw = _decode_nse_output(sc.get("output", "") or "")
+                nse_data.append((sid, raw))
+                cleaned = (raw or "").replace("\r", " ").replace("\n", " | ")
+                output_lines.append(f"[{sid}] {cleaned}" if sid else cleaned)
+            nse = "\n".join(output_lines)
+            if nse_extract is not None and nse_data:
+                try:
+                    merged = nse_extract.extract_all_nse(nse_data)
+                    nse_summary = nse_extract.format_nse_summary(merged)
+                    if nse_summary:
+                        nse = (nse + "\n" + nse_summary) if nse else nse_summary
+                except Exception:
+                    pass
             if not (ip and proto and portid):
                 continue
             rows.append({
@@ -3743,12 +3765,16 @@ class NmapParserApp:
                         s = s.strip()
                         if s:
                             nse_scripts.append(s)
+                if len(tokens) > 2:
+                    extra_tokens.extend(tokens[2:])
             elif tokens[0].startswith("--script="):
                 val = tokens[0][len("--script="):]
                 for s in val.split(","):
                     s = s.strip()
                     if s:
                         nse_scripts.append(s)
+                if len(tokens) > 1:
+                    extra_tokens.extend(tokens[1:])
             else:
                 extra_tokens.extend(tokens)
         return extra_tokens, nse_scripts
@@ -3798,6 +3824,9 @@ class NmapParserApp:
                 continue
             if t == "-oA" or t == "-oX" or t == "-oN" or t == "-oG":
                 skip_next = True
+                continue
+            low = (t or "").lower()
+            if low.startswith(("-oa", "-ox", "-on", "-og")) and len(low) > 3:
                 continue
             cleaned.append(t)
         return cleaned

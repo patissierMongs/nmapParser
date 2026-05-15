@@ -187,6 +187,128 @@ class ReportCorrectionScopeOpenSummaryTests(unittest.TestCase):
         self.assertIn("대상아님", text)
         self.assertNotIn("OUT_OF_SCOPE", text)
 
+    def test_ipv6_heatmap_keeps_ip_and_port_columns_intact(self):
+        snapshots = [
+            ("week1", [{"IP": "2001:db8::10", "프로토콜": "tcp", "포트": "443", "포트상태": "open", "확인서비스(short)": "https"}]),
+            ("week2", [{"IP": "2001:db8::10", "프로토콜": "tcp", "포트": "443", "포트상태": "open", "확인서비스(short)": "https"}]),
+        ]
+        heatmap = rg._build_sheet_heatmap_final(snapshots)
+        row = heatmap["rows"][0]
+        self.assertEqual(row[1], "2001:db8::10")
+        self.assertEqual(row[5], "tcp")
+        self.assertEqual(row[6], "443")
+
+    def test_xml_target_specification_takes_precedence_over_observed_addresses(self):
+        with tempfile.TemporaryDirectory() as td:
+            csv_path = os.path.join(td, "scan_20260508_090000.csv")
+            _write_csv(csv_path, [_row("10.0.0.2", "22")])
+            with open(os.path.splitext(csv_path)[0] + ".xml", "w", encoding="utf-8") as f:
+                f.write(
+                    '<?xml version="1.0"?><nmaprun>'
+                    '<target specification="10.0.0.0/24"/>'
+                    '<scaninfo type="syn" protocol="tcp" services="22"/>'
+                    '<host><address addr="10.0.0.2" addrtype="ipv4"/></host>'
+                    '</nmaprun>'
+                )
+            scope = rg._load_scope_for_csv(csv_path, rg._read_csv_rows(csv_path)[0])
+            self.assertTrue(rg._ip_in_scope("10.0.0.1", scope))
+            self.assertTrue(rg._port_in_scope("22", "tcp", scope))
+
+    def test_xml_args_scope_used_when_target_element_is_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            csv_path = os.path.join(td, "scan_20260508_090000.csv")
+            _write_csv(csv_path, [_row("10.0.0.2", "22")])
+            with open(os.path.splitext(csv_path)[0] + ".xml", "w", encoding="utf-8") as f:
+                f.write(
+                    '<?xml version="1.0"?><nmaprun args="nmap -sS -p 22 10.0.0.0/24 -oA scan">'
+                    '<scaninfo type="syn" protocol="tcp" services="22"/>'
+                    '<host><address addr="10.0.0.2" addrtype="ipv4"/></host>'
+                    '</nmaprun>'
+                )
+            scope = rg._load_scope_for_csv(csv_path, rg._read_csv_rows(csv_path)[0])
+            self.assertTrue(rg._ip_in_scope("10.0.0.99", scope))
+            self.assertTrue(rg._port_in_scope("22", "tcp", scope))
+
+    def test_observed_xml_addresses_alone_do_not_make_missing_host_out_of_scope(self):
+        with tempfile.TemporaryDirectory() as td:
+            week1 = os.path.join(td, "scan_20260501_090000.csv")
+            week2 = os.path.join(td, "scan_20260508_090000.csv")
+            _write_csv(week1, [_row("10.0.0.5", "22")])
+            _write_csv(week2, [_row("10.0.0.6", "22")])
+            with open(os.path.splitext(week2)[0] + ".xml", "w", encoding="utf-8") as f:
+                f.write(
+                    '<?xml version="1.0"?><nmaprun>'
+                    '<scaninfo type="syn" protocol="tcp" services="22"/>'
+                    '<host><address addr="10.0.0.6" addrtype="ipv4"/></host>'
+                    '</nmaprun>'
+                )
+            snapshots = [
+                ("20260501_090000", rg._read_csv_rows(week1)[0]),
+                ("20260508_090000", rg._read_csv_rows(week2)[0]),
+            ]
+            scope_info = {"20260508_090000": rg._load_scope_for_csv(week2, snapshots[1][1])}
+            tokens = rg._state_token_timeline(
+                rg._build_snapshot_maps(snapshots), "10.0.0.5:22/tcp", scope_info=scope_info
+            )[0]
+            self.assertEqual(tokens, ["NEW_OPEN", "UNOBSERVED"])
+
+    def test_filtered_after_open_is_not_reported_as_closed(self):
+        snapshots = [
+            ("week1", [{"IP": "10.0.0.5", "프로토콜": "tcp", "포트": "22", "포트상태": "open", "확인서비스(short)": "ssh"}]),
+            ("week2", [{"IP": "10.0.0.5", "프로토콜": "tcp", "포트": "22", "포트상태": "filtered", "확인서비스(short)": "ssh"}]),
+        ]
+        per_tp = rg._build_snapshot_maps(snapshots)
+        self.assertEqual(rg._state_token_timeline(per_tp, "10.0.0.5:22/tcp")[0], ["NEW_OPEN", "FILTERED"])
+        self.assertEqual(rg._change_type_for_key(per_tp, "10.0.0.5:22/tcp"), "FILTERED")
+
+    def test_xml_mixed_target_spec_keeps_observed_address_fallback(self):
+        with tempfile.TemporaryDirectory() as td:
+            csv_path = os.path.join(td, "scan_20260508_090000.csv")
+            _write_csv(csv_path, [_row("10.0.1.25", "22")])
+            with open(os.path.splitext(csv_path)[0] + ".xml", "w", encoding="utf-8") as f:
+                f.write(
+                    '<?xml version="1.0"?><nmaprun>'
+                    '<target specification="10.0.0.0/24 10.0.1.1-50"/>'
+                    '<scaninfo type="syn" protocol="tcp" services="22"/>'
+                    '<host><address addr="10.0.1.25" addrtype="ipv4"/></host>'
+                    '</nmaprun>'
+                )
+            scope = rg._load_scope_for_csv(csv_path, rg._read_csv_rows(csv_path)[0])
+            self.assertTrue(rg._ip_in_scope("10.0.0.5", scope))
+            self.assertTrue(rg._ip_in_scope("10.0.1.25", scope))
+
+    def test_out_of_scope_gap_breaks_open_continuity(self):
+        snapshots = [
+            ("week1", [{"IP": "10.0.0.5", "프로토콜": "tcp", "포트": "22", "포트상태": "open", "확인서비스(short)": "ssh"}]),
+            ("week2", []),
+            ("week3", [{"IP": "10.0.0.5", "프로토콜": "tcp", "포트": "22", "포트상태": "open", "확인서비스(short)": "ssh"}]),
+        ]
+        scope_info = {
+            "week2": rg._parse_scope_targets("10.0.1.0/24", ports="22"),
+        }
+        tokens = rg._state_token_timeline(rg._build_snapshot_maps(snapshots), "10.0.0.5:22/tcp", scope_info=scope_info)[0]
+        self.assertEqual(tokens, ["NEW_OPEN", "OUT_OF_SCOPE", "NEW_OPEN"])
+
+    def test_collect_csv_files_ignores_exported_report_sheet_csvs(self):
+        with tempfile.TemporaryDirectory() as td:
+            scan = os.path.join(td, "scan_20260501_090000.csv")
+            _write_csv(scan, [_row("10.0.0.1", "22")])
+            with open(os.path.join(td, "00_보고요약.csv"), "w", encoding="utf-8") as f:
+                f.write("섹션,항목,값\n보고 기준,현재 스캔 시점,20260501_090000\n")
+            with open(os.path.join(td, "02_시간축히트맵.csv"), "w", encoding="utf-8") as f:
+                f.write("자산키,IP,포트\n10.0.0.1|tcp|22,10.0.0.1,22\n")
+            files = rg.collect_csv_files(td)
+            self.assertEqual([os.path.basename(path) for path, _label in files], ["scan_20260501_090000.csv"])
+
+    def test_header_whitespace_is_accepted_for_required_columns_and_rows(self):
+        with tempfile.TemporaryDirectory() as td:
+            csv_path = os.path.join(td, "scan_20260501_090000.csv")
+            header = _HEADER_24.replace("IP,호스트", " IP ,호스트").replace("프로토콜", " 프로토콜 ").replace("포트,표준포트", " 포트 ,표준포트").replace("포트상태", " 포트상태 ")
+            _write_csv(csv_path, [_row("10.0.0.1", "22")], header=header)
+            rows, _enc, headers = rg._read_csv_rows_with_headers(csv_path)
+            rg._validate_required_headers(headers, csv_path)
+            self.assertEqual(rg._key_for_row(rows[0]), "10.0.0.1:22/tcp")
+
     def test_report_summary_focuses_on_cumulative_and_current_scan_not_previous_baseline(self):
         snapshots = [
             ("week1", [{"IP": "10.0.0.1", "프로토콜": "tcp", "포트": "22", "포트상태": "open", "확인서비스(short)": "ssh"}]),

@@ -51,6 +51,18 @@ class ConfigLoadingTests(unittest.TestCase):
         self.assertEqual(catmap["customsvc"]["risk"], "중")
         self.assertEqual(catmap["customsvc"]["memo"], "현장 확인")
 
+    def test_categories_loader_accepts_legacy_encryption_and_auth_columns(self):
+        path = self._xlsx([
+            ["서비스명", "분류", "암호화", "인증"],
+            ["customsvc", "업무", "TLS", "인증서"],
+        ])
+
+        catmap, errors = np.load_categories_xlsx(path)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(catmap["customsvc"]["encryption"], "TLS")
+        self.assertEqual(catmap["customsvc"]["auth"], "인증서")
+
     def test_loader_reports_duplicate_alias_headers(self):
         path = self._xlsx([
             ["스캔 옵션", "옵션명", "옵션", "활성화"],

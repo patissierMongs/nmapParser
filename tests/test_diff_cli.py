@@ -104,6 +104,49 @@ class DiffEngineTests(unittest.TestCase):
             self.assertEqual(rows[0]["state"], "open")
             self.assertEqual(rows[0]["service"], "ssh")
 
+    def test_xml_and_generated_csv_diff_digest_match_for_script_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            xml_path = os.path.join(td, "sample.xml")
+            csv_path = os.path.join(td, "sample.csv")
+            xml = """<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <address addr="10.0.0.2" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="80">
+        <state state="open"/>
+        <service name="http" method="probed" product="nginx"/>
+        <script id="http-title" output="Portal"/>
+      </port>
+    </ports>
+  </host>
+</nmaprun>"""
+            with open(xml_path, "w", encoding="utf-8") as f:
+                f.write(xml)
+            np.convert_xml_to_csv_standalone(xml_path, csv_path)
+            self.assertEqual(np.parse_xml_rows_for_diff(xml_path)[0]["digest"], np.parse_csv_rows_for_diff(csv_path)[0]["digest"])
+
+    def test_xml_and_generated_csv_diff_service_match_for_table_method(self):
+        with tempfile.TemporaryDirectory() as td:
+            xml_path = os.path.join(td, "sample.xml")
+            csv_path = os.path.join(td, "sample.csv")
+            xml = """<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <address addr="10.0.0.2" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="80">
+        <state state="open"/>
+        <service name="http" method="table"/>
+      </port>
+    </ports>
+  </host>
+</nmaprun>"""
+            with open(xml_path, "w", encoding="utf-8") as f:
+                f.write(xml)
+            np.convert_xml_to_csv_standalone(xml_path, csv_path)
+            self.assertEqual(np.parse_xml_rows_for_diff(xml_path)[0]["service"], np.parse_csv_rows_for_diff(csv_path)[0]["service"])
+
     def test_parse_nmap_xml_resilient_with_truncated_tail(self):
         with tempfile.TemporaryDirectory() as td:
             xml_path = os.path.join(td, "broken.xml")
