@@ -148,6 +148,45 @@ class ReportCorrectionScopeOpenSummaryTests(unittest.TestCase):
             self.assertTrue(rg._port_in_scope("443", "tcp", scope))
             self.assertFalse(rg._port_in_scope("22", "tcp", scope))
 
+    def test_xml_scaninfo_scope_marks_unscanned_top_port_as_out_of_scope(self):
+        with tempfile.TemporaryDirectory() as td:
+            week1 = os.path.join(td, "localhost_20260515_104352.csv")
+            week2 = os.path.join(td, "localhost_20260515_105713.csv")
+            _write_csv(week1, [_row("127.0.0.1", "12222", service="unknown")])
+            _write_csv(week2, [_row("127.0.0.1", "135", service="msrpc")])
+            with open(os.path.splitext(week2)[0] + ".xml", "w", encoding="utf-8") as f:
+                f.write(
+                    '<?xml version="1.0"?><nmaprun>'
+                    '<scaninfo type="syn" protocol="tcp" numservices="3" services="80,135,443"/>'
+                    '<host><address addr="127.0.0.1" addrtype="ipv4"/></host>'
+                    '</nmaprun>'
+                )
+
+            rows1 = rg._read_csv_rows(week1)[0]
+            rows2 = rg._read_csv_rows(week2)[0]
+            scope_info = {
+                "20260515_104352": rg._load_scope_for_csv(week1, rows1),
+                "20260515_105713": rg._load_scope_for_csv(week2, rows2),
+            }
+            per_tp = rg._build_snapshot_maps([("20260515_104352", rows1), ("20260515_105713", rows2)])
+            self.assertFalse(rg._port_in_scope("12222", "tcp", scope_info["20260515_105713"]))
+            self.assertEqual(
+                rg._state_token_timeline(per_tp, "127.0.0.1:12222/tcp", scope_info=scope_info)[0],
+                ["NEW_OPEN", "OUT_OF_SCOPE"],
+            )
+
+    def test_heatmap_displays_scope_tokens_in_korean(self):
+        snapshots = [
+            ("week1", [{"IP": "10.0.0.5", "프로토콜": "tcp", "포트": "22", "포트상태": "open", "확인서비스(short)": "ssh"}]),
+            ("week2", [{"IP": "10.0.0.5", "프로토콜": "tcp", "포트": "80", "포트상태": "open", "확인서비스(short)": "http"}]),
+        ]
+        scope_info = {"week2": rg._parse_scope_targets("10.0.0.0/24", ports="80")}
+        heatmap = rg._build_sheet_heatmap_final(snapshots, scope_info=scope_info)
+        text = "\n".join("|".join(row) for row in heatmap["rows"])
+        self.assertIn("신규OPEN", text)
+        self.assertIn("대상아님", text)
+        self.assertNotIn("OUT_OF_SCOPE", text)
+
     def test_report_summary_focuses_on_cumulative_and_current_scan_not_previous_baseline(self):
         snapshots = [
             ("week1", [{"IP": "10.0.0.1", "프로토콜": "tcp", "포트": "22", "포트상태": "open", "확인서비스(short)": "ssh"}]),

@@ -23,6 +23,7 @@ import ipaddress
 import os
 import re
 import shlex
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 import xlsx_io
@@ -53,6 +54,14 @@ DISPLAY_HEADER_MAP = {
     "확인서비스": "스캔식별서비스",
 }
 NUMERIC_REPORT_COLUMNS = {"포트", "표준포트", "행 수", "크기_KB", "관측횟수", "변경횟수", "표시순서"}
+STATE_DISPLAY_KO = {
+    "NEW_OPEN": "신규OPEN",
+    "KEEP": "유지",
+    "CHANGED": "변경",
+    "CLOSED": "닫힘",
+    "UNOBSERVED": "미관측",
+    "OUT_OF_SCOPE": "대상아님",
+}
 
 
 def _display_header(name):
@@ -61,6 +70,10 @@ def _display_header(name):
 
 def _display_headers(headers):
     return [_display_header(h) for h in headers]
+
+
+def _display_state_token(token):
+    return STATE_DISPLAY_KO.get(token, token)
 
 
 def _numeric_columns_for(headers):
@@ -779,8 +792,8 @@ def _build_sheet_heatmap_final(snapshots, scope_info=None):
         row = [
             f"{ip}|{proto}|{port}", ip, _ip_3octet(ip), _row_get(latest, "호스트"), _row_get(latest, "OS"), proto, port,
             _row_service(latest), _row_get(latest, "분류"), _row_get(latest, "용도"), _row_get(latest, "위험도"),
-            _state_for_row(latest), str(observed), str(changes), change, "", "미확인" if change in ("NEW_OPEN", "CHANGED") else "", "", _row_get(latest, "점검메모"),
-        ] + tokens
+            _state_for_row(latest), str(observed), str(changes), _display_state_token(change), "", "미확인" if change in ("NEW_OPEN", "CHANGED") else "", "", _row_get(latest, "점검메모"),
+        ] + [_display_state_token(t) for t in tokens]
         rows.append(row)
         rf = {"NEW_OPEN": xlsx_io.FILL_NEW_OPEN, "CHANGED": xlsx_io.FILL_CHANGED, "CLOSED": xlsx_io.FILL_CLOSED}.get(change, xlsx_io.FILL_KEEP)
         row_fills.append(rf)
@@ -916,6 +929,46 @@ def _build_sheet_service_settings_final():
             "numeric_columns": _numeric_columns_for(headers)}
 
 
+def _load_scope_from_xml(xml_path):
+    """nmap XML의 실제 scaninfo/host 주소에서 최소 scope를 읽는다."""
+    if not os.path.isfile(xml_path):
+        return None
+    try:
+        root = ET.parse(xml_path).getroot()
+    except Exception:
+        return None
+
+    targets = []
+    seen_targets = set()
+    for addr in root.findall(".//address"):
+        value = (addr.attrib.get("addr") or "").strip()
+        if not value or value in seen_targets:
+            continue
+        try:
+            ipaddress.ip_address(value)
+        except ValueError:
+            continue
+        seen_targets.add(value)
+        targets.append(value)
+
+    port_parts = []
+    for scaninfo in root.findall("scaninfo"):
+        services = (scaninfo.attrib.get("services") or "").strip()
+        if not services:
+            continue
+        proto = (scaninfo.attrib.get("protocol") or "").strip().lower()
+        if proto == "tcp":
+            port_parts.append("T:" + services)
+        elif proto == "udp":
+            port_parts.append("U:" + services)
+        else:
+            port_parts.append(services)
+
+    if not targets and not port_parts:
+        return None
+    return _parse_scope_targets(" ".join(targets), ports=",".join(port_parts))
+
+
 def _load_scope_for_csv(csv_path, rows):
     """CSV 메타 컬럼/sidecar/log에서 최소 target+port scope를 읽는다. 없으면 unknown."""
     for r in rows:
@@ -924,6 +977,9 @@ def _load_scope_for_csv(csv_path, rows):
         if target or ports:
             return _parse_scope_targets(target, ports=ports)
     stem = os.path.splitext(csv_path)[0]
+    xml_scope = _load_scope_from_xml(stem + ".xml")
+    if xml_scope is not None:
+        return xml_scope
     for suffix in (".targets", ".scope", ".target.txt", ".targets.txt"):
         p = stem + suffix
         if os.path.isfile(p):

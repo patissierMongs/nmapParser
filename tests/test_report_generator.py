@@ -92,10 +92,10 @@ class ReportGeneratorTests(unittest.TestCase):
                 styles = z.read("xl/styles.xml").decode("utf-8")
                 self.assertIn("FFFFCDD2", styles, "NEW_OPEN red 색이 styles.xml 에 없음")
                 self.assertIn("FFFFF59D", styles, "CHANGED yellow 색이 styles.xml 에 없음")
-                # sharedStrings 에 "신규"/"유지" 토큰이 있어야 (히트맵 셀 값)
+                # sharedStrings 에 한글 상태 토큰이 있어야 (히트맵 셀 값)
                 shared = z.read("xl/sharedStrings.xml").decode("utf-8")
-                self.assertIn("NEW_OPEN", shared, "히트맵에 'NEW_OPEN' 토큰 없음")
-                self.assertIn("KEEP", shared, "히트맵에 'KEEP' 토큰 없음")
+                self.assertIn("신규OPEN", shared, "히트맵에 '신규OPEN' 토큰 없음")
+                self.assertIn("유지", shared, "히트맵에 '유지' 토큰 없음")
                 # 히트맵 시트 (sheet3.xml) 에 색칠된 cell (s="2"=NEW_OPEN, s="3"=KEEP) 가 적용돼야
                 heatmap_xml = z.read("xl/worksheets/sheet3.xml").decode("utf-8")
                 self.assertTrue(
@@ -140,8 +140,8 @@ class ReportGeneratorTests(unittest.TestCase):
             # 1차 시점 → 2차 시점: NEW_OPEN=1 (포트 80 신규), CLOSED=0, CHANGED=1 (443 nginx 1.24→1.25), UNCHANGED=1 (22)
             # 2차 → 3차: NEW_OPEN=0, CLOSED=1 (80 닫힘), CHANGED=1 (22 위험도 변경 — service 시그니처 동일하면 안 잡힘)
             # 위험도 변경은 service 시그니처 변경 아님 → CHANGED 안 잡힐 수도. 그래서 약한 검증만.
-            self.assertIn("NEW_OPEN", shared)
-            self.assertIn("CLOSED", shared)
+            self.assertIn("신규OPEN", shared)
+            self.assertIn("닫힘", shared)
 
     def test_heatmap_marks_service_signature_change(self):
         with tempfile.TemporaryDirectory() as td:
